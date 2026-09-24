@@ -26,11 +26,14 @@ AGENT_SYSTEM = (
     "plan schema, and complete example as your interface. Decide suitability first. "
     "If fewer than two distinct native small-prop categories can be augmented "
     "naturally, write unsuitable.json and stop. Otherwise write plan.json promptly, "
-    "then invoke build and verify and revise the plan if needed. Do not proactively "
-    "inspect framework source, scan the filesystem, install packages, or write custom "
+    "then invoke build, inspect all six reveal/detail images, write your own answers, "
+    "and verify; revise the plan if needed. Do not proactively call --help, "
+    "inspect framework source, scan the filesystem, extract raw GLB textures, "
+    "install packages, or write custom "
     "rendering scripts. If build or verify fails, inspect the concise error and "
     "output/validation.json, then revise plan.json. Never read package source code. "
-    "Keep original geometry/materials and never invent unverifiable answer counts."
+    "Keep original geometry/materials. Answers come from your visual inspection, "
+    "not from a registry answer calculator."
 )
 
 
@@ -78,12 +81,14 @@ Scene ID: {scene_id}. Work directory: {work}.
 The source is {work / 'source.glb'}. Inventory: {work / 'inspect/inventory.json'}.
 Four color previews are in {work / 'inspect'}; use Read on the PNGs.
 Create {work / 'plan.json'} following {ROOT / 'docs/PLAN_SCHEMA.md'} and
-{ROOT / 'docs/QUESTION_TYPES.md'}. Use schema_version 1.2.
-Use {ROOT / 'examples/sample_plan.json'} only as a STRUCTURAL example; adapt every
+{ROOT / 'docs/QUESTION_TYPES.md'}. Use schema_version 1.3.
+Use {ROOT / 'examples/model_answer_fixture_plan.json'} only as a STRUCTURAL example; adapt every
 object name, location and question to this source. Read inventory and four previews.
-Do not inspect package source files, runner logs, task.txt, or status.json; the
+Do not call --help or inspect package source files, runner logs, task.txt, or status.json; the
 schema and supplied commands are the complete interface. Start writing the plan
 as soon as you have identified suitable original objects and support surfaces.
+Use the supplied rendered images for appearance; do not unpack GLB images or
+create texture-extraction scripts.
 There must be exactly three independently augmented variants from the SAME original source:
 simple, medium, hard. Use only native visible scene objects as copy templates.
 No imported plush toys, props, color changes, invisible labels or unrelated decorations.
@@ -97,8 +102,15 @@ independently, and use a different question_type for each. If a type is infeasib
 skip it and explain why in agent_notes.md. Do not force scene-inappropriate props.
 The same type may be simple, medium or hard in OTHER scenes; types are not tied to tiers.
 For count use mode count/compare; for identity use mode identify. The other eight
-types use mode evidence with declared_answer and evidence_ids, and will be marked
-needs_review rather than certified candidate until a typed verifier is added.
+types use mode evidence. EVERY question needs declared_answer and evidence_ids.
+The answer is your own visual observation, including count and identity. The
+program does not calculate or cross-check question answers. Use evidence_ids for
+the copied/native objects you inspected, not arbitrary names.
+Write a provisional declared_answer in the plan so build can run; after opening
+the generated answer views, correct it if the images show something different.
+For a count question, every relevant original and copy must be visually countable
+from the supplied/rendered views. If scattered or hidden originals make the total
+ambiguous, choose a smaller named region or skip count rather than guessing.
 Use natural Chinese questions and keep three answers distinct.
 
 DIFFICULTY: Simple gives a direct target but hides critical evidence at the start.
@@ -125,10 +137,44 @@ and finish. This is an acceptable outcome for batch filtering.
 Your tools: Bash, Read, Write, Edit, Glob, Grep. You can call:
 {sys.executable} -m scene_factory.cli build --source {work / 'source.glb'} --plan {work / 'plan.json'} --output {work / 'output'}
 {sys.executable} -m scene_factory.cli verify --plan {work / 'plan.json'} --output {work / 'output'}
+After EACH build, Read output/simple/reveal.png and detail.png, and likewise for
+medium and hard. Reconsider each declared_answer from those images plus source
+previews, inventory and the explicit nearest-anchor geometry. Update plan.json
+if an answer or question wording changes, then run verify. If the model cannot
+see the detail well enough, change the plan/placement and rebuild; do not guess.
 Iterate the plan/build/verify inside this same session until verify succeeds.
 No second Claude session will be launched. Finally write {work / 'agent_notes.md'}
 with naturalness reasoning and any uncertainties. Do not assert an untested 30-step claim.
 """
+
+
+def observed_evidence_reads(stream_path: Path, work: Path) -> list[str]:
+    """List reveal/detail images explicitly opened by the Claude agent."""
+    observed = set()
+    if not stream_path.exists():
+        return []
+    for line in stream_path.read_text(errors="replace").splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if event.get("type") != "assistant":
+            continue
+        for block in event.get("message", {}).get("content", []):
+            if block.get("type") != "tool_use" or block.get("name") != "Read":
+                continue
+            raw = (block.get("input") or {}).get("file_path")
+            if not raw:
+                continue
+            path = Path(raw)
+            if not path.is_absolute():
+                path = work / path
+            for level in ("simple", "medium", "hard"):
+                for kind in ("reveal", "detail"):
+                    expected = work / "output" / level / f"{kind}.png"
+                    if path.resolve() == expected.resolve():
+                        observed.add(f"{level}/{kind}.png")
+    return sorted(observed)
 
 
 def run_one(row: dict, output_root: Path, *, source_path: Path | None = None,
@@ -241,9 +287,16 @@ def run_one(row: dict, output_root: Path, *, source_path: Path | None = None,
             return state
         plan_path = work / "plan.json"
         plan = read_plan(plan_path)
+        if plan["schema_version"] == "1.3":
+            reads = observed_evidence_reads(work / "claude_stream.jsonl", work)
+            state["visual_evidence_reads"] = reads
+            required = {f"{level}/{kind}.png" for level in ("simple", "medium", "hard")
+                        for kind in ("reveal", "detail")}
+            if missing := required - set(reads):
+                raise ValueError(f"Agent did not inspect required answer views: {sorted(missing)}")
         plan["scene_id"] = scene_id
         plan["source"] = state["source"]
-        if plan["schema_version"] == "1.2":
+        if plan["schema_version"] in ("1.2", "1.3"):
             seed = int(os.environ.get("SCENEQA_QUESTION_SEED", "0"))
             plan["type_selection"] = {"seed": seed,
                                       "ordered_candidates": type_order(scene_id, seed),

@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from .download import glb_header
-from .schema import answer_from_registry, read_plan
+from .schema import MODERN, answer_from_model, answer_from_registry, read_plan
 
 
 def validate(plan_path: Path, output: Path, *, strict: bool = True) -> dict:
@@ -25,7 +25,8 @@ def validate(plan_path: Path, output: Path, *, strict: bool = True) -> dict:
         glb_header(path)
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
         hashes.append(digest)
-        answer = answer_from_registry(variant)
+        answer = (answer_from_model(variant) if plan["schema_version"] == "1.3"
+                  else answer_from_registry(variant))
         answers.append(answer["value"])
         semantic_warnings = []
         for entity in variant["entities"]:
@@ -44,8 +45,8 @@ def validate(plan_path: Path, output: Path, *, strict: bool = True) -> dict:
         seen_in_probes = {cid for p in build["view_probes"] for cid in p["visible_copy_ids"]}
         seen_in_probes |= {p["copy_id"] for p in build.get("local_view_probes", [])}
         coverage = declared <= seen_in_probes
-        min_hidden = {"simple": 1, "medium": 1 if plan["schema_version"] in ("1.1", "1.2") else 2,
-                      "hard": 1 if plan["schema_version"] == "1.2" else
+        min_hidden = {"simple": 1, "medium": 1 if plan["schema_version"] in ("1.1", *MODERN) else 2,
+                      "hard": 1 if plan["schema_version"] in MODERN else
                       2 if plan["schema_version"] == "1.1" else 3}[level]
         nontrivial = len(unseen) >= min_hidden
         # Different probes are required to expose all hidden copies. This is an
@@ -53,8 +54,12 @@ def validate(plan_path: Path, output: Path, *, strict: bool = True) -> dict:
         reachable = [p for p in build["view_probes"] if set(p["visible_copy_ids"]) & unseen]
         reachable += [p for p in build.get("local_view_probes", []) if p["copy_id"] in unseen]
         occlusion = build.get("occlusion_evidence", {})
+        evidence_views = build.get("evidence_views", {})
+        evidence_present = (plan["schema_version"] != "1.3" or
+                            all((output / level / f"{name}.png").is_file()
+                                for name in ("reveal", "detail")))
         occlusion_gate = True
-        if level in ("medium", "hard") and plan["schema_version"] in ("1.1", "1.2"):
+        if level in ("medium", "hard") and plan["schema_version"] in ("1.1", *MODERN):
             # A hidden target must be concealed by a named, nearby scene prop,
             # rather than merely disappearing behind the global perimeter wall.
             passing_occlusion = {cid: evidence for cid, evidence in occlusion.items()
@@ -77,7 +82,8 @@ def validate(plan_path: Path, output: Path, *, strict: bool = True) -> dict:
                 occlusion_gate = (anchor.get("resolved_anchor_object") == query["answer_anchor_object"] and
                                   anchor.get("margin_ratio", 0) >= 0.15 and
                                   query["target_copy_id"] in passing_occlusion)
-        gate = coverage and nontrivial and bool(reachable) and not build.get("copy_collisions") and occlusion_gate
+        gate = (coverage and nontrivial and bool(reachable) and
+                not build.get("copy_collisions") and occlusion_gate and evidence_present)
         results.append({"level": level, "scene": str(path), "sha256": digest,
                         "question": variant["question"]["text"], "answer": answer,
                         "start_camera": build["start_camera"], "hidden_copy_ids_at_start": sorted(unseen),
@@ -90,8 +96,9 @@ def validate(plan_path: Path, output: Path, *, strict: bool = True) -> dict:
                         "occlusion_evidence": occlusion, "occlusion_gate": occlusion_gate,
                         "anchor_query_evidence": build.get("anchor_query_evidence"),
                         "question_type": variant["question"].get("question_type"),
+                        "evidence_views": evidence_views, "evidence_present": evidence_present,
                         "answer_verified": answer.get("verified", True) and not (
-                            plan["schema_version"] == "1.2" and level == "hard" and
+                            plan["schema_version"] in MODERN and level == "hard" and
                             variant["question"]["mode"] in ("count", "compare")),
                         "visibility_gate": gate, "size_bytes": path.stat().st_size,
                         "license": plan.get("source", {}).get("license")})
@@ -101,8 +108,10 @@ def validate(plan_path: Path, output: Path, *, strict: bool = True) -> dict:
         raise ValueError("Answers must differ across the three variants")
     passed = all(r["visibility_gate"] for r in results)
     report = {"scene_id": plan.get("scene_id"),
-              "status": "candidate" if passed and all(r["answer_verified"] for r in results)
+              "status": "candidate" if passed and (plan["schema_version"] == "1.3" or
+                                                    all(r["answer_verified"] for r in results))
                         else "needs_review" if passed else "failed",
+              "answer_source": "model_visual" if plan["schema_version"] == "1.3" else "mixed",
               "results": results,
               "limitations": ["Original entity registry requires independent semantic completeness audit",
                               "Visibility probes do not certify a 30-action human/agent solving difficulty",

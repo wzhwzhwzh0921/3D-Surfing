@@ -1,0 +1,275 @@
+{
+  "schema_version": "1.3",
+  "scene_id": "a450b90cb444431d93c6e4bab70fa233",
+  "variants": [
+    {
+      "level": "simple",
+      "entities": [
+        {
+          "id": "coin_a",
+          "kind": "coin",
+          "objects": [
+            "coin2_coin_0"
+          ],
+          "pose": "flat",
+          "region": "lawn"
+        },
+        {
+          "id": "coin_b",
+          "kind": "coin",
+          "objects": [
+            "coin3_coin_0"
+          ],
+          "pose": "flat",
+          "region": "lawn"
+        },
+        {
+          "id": "coin_c",
+          "kind": "coin",
+          "objects": [
+            "coin4_coin_0"
+          ],
+          "pose": "flat",
+          "region": "lawn"
+        }
+      ],
+      "copies": [
+        {
+          "id": "coin_1",
+          "from": "coin_a",
+          "xy": [
+            -8.0,
+            -5.0
+          ],
+          "support_object": "pPlane1_grass_0",
+          "yaw_deg": 35,
+          "pose": "flat",
+          "region": "lawn"
+        },
+        {
+          "id": "coin_2",
+          "from": "coin_b",
+          "xy": [
+            -8.0,
+            5.8
+          ],
+          "support_object": "pPlane1_grass_0",
+          "yaw_deg": 120,
+          "pose": "flat",
+          "region": "lawn"
+        }
+      ],
+      "question": {
+        "mode": "count",
+        "kind": "coin",
+        "text": "草坪上一共有多少枚硬币？",
+        "pose": "flat",
+        "region": "lawn",
+        "question_type": "count",
+        "declared_answer": 5,
+        "evidence_ids": [
+          "coin_1",
+          "coin_2"
+        ]
+      },
+      "start_camera": {
+        "azimuth_deg": 45,
+        "elevation_deg": 20
+      }
+    },
+    {
+      "level": "medium",
+      "entities": [
+        {
+          "id": "clip_flat_a",
+          "kind": "paperclip",
+          "objects": [
+            "paperclip2_lambert38_0"
+          ],
+          "pose": "flat",
+          "region": "bobbin_top"
+        },
+        {
+          "id": "clip_flat_b",
+          "kind": "paperclip",
+          "objects": [
+            "paperclip3_lambert40_0"
+          ],
+          "pose": "flat",
+          "region": "bobbin_top"
+        },
+        {
+          "id": "clip_flat_c",
+          "kind": "paperclip",
+          "objects": [
+            "paperclip8_lambert40_0"
+          ],
+          "pose": "flat",
+          "region": "bobbin_top"
+        },
+        {
+          "id": "clip_stand",
+          "kind": "paperclip",
+          "objects": [
+            "paperclip5_lambert41_0"
+          ],
+          "pose": "standing",
+          "region": "lawn"
+        },
+        {
+          "id": "clip_hang_a",
+          "kind": "paperclip",
+          "objects": [
+            "paperclip6_lambert36_0"
+          ],
+          "pose": "hanging",
+          "region": "clothesline"
+        },
+        {
+          "id": "clip_hang_b",
+          "kind": "paperclip",
+          "objects": [
+            "paperclip_paperclip7_0"
+          ],
+          "pose": "hanging",
+          "region": "clothesline"
+        }
+      ],
+      "copies": [
+        {
+          "id": "clip_behind_mushroom",
+          "from": "clip_flat_a",
+          "xy": [
+            3.3,
+            -5.7
+          ],
+          "support_object": "pPlane1_grass_0",
+          "yaw_deg": 70,
+          "pose": "flat",
+          "region": "lawn"
+        }
+      ],
+      "question": {
+        "question_type": "color",
+        "mode": "evidence",
+        "kind": "paperclip",
+        "text": "蘑菇桌下那枚纸夹是什么颜色？",
+        "declared_answer": "蓝色",
+        "evidence_ids": [
+          "clip_behind_mushroom"
+        ]
+      },
+      "start_camera": {
+        "azimuth_deg": 270,
+        "elevation_deg": 30
+      },
+      "occlusion_targets": [
+        {
+          "target_copy_id": "clip_behind_mushroom",
+          "blocker_objects": [
+            "mushroom_and_mushroom_stool:mushrooms_table_lambert50_0"
+          ]
+        }
+      ]
+    },
+    {
+      "level": "hard",
+      "entities": [
+        {
+          "id": "saucer_original",
+          "kind": "teacup_and_saucer",
+          "objects": [
+            "saucer1_teacup_and_saucer_0"
+          ],
+          "pose": "flat",
+          "region": "mushroom_area"
+        },
+        {
+          "id": "cap_original",
+          "kind": "bowl",
+          "objects": [
+            "bottle_cap_bowl_0"
+          ],
+          "pose": "flat",
+          "region": "mushroom_area"
+        }
+      ],
+      "copies": [
+        {
+          "id": "saucer_hidden",
+          "from": "saucer_original",
+          "xy": [
+            4.5,
+            -2.3
+          ],
+          "support_object": "pPlane1_grass_0",
+          "yaw_deg": 25,
+          "pose": "flat",
+          "region": "mushroom_area"
+        },
+        {
+          "id": "cap_hidden",
+          "from": "cap_original",
+          "xy": [
+            -1.1,
+            -7.9
+          ],
+          "support_object": "pPlane1_grass_0",
+          "yaw_deg": 0,
+          "pose": "flat",
+          "region": "mushroom_area"
+        }
+      ],
+      "question": {
+        "mode": "identify",
+        "kind": "teacup_and_saucer",
+        "answer_copy_id": "saucer_hidden",
+        "anchor_blocker_object": "mushroom2_mushroom3_0",
+        "text": "两朵小蘑菇中，离胡萝卜最近的那朵下面藏着什么？",
+        "question_type": "identity",
+        "declared_answer": "茶杯和茶碟",
+        "evidence_ids": [
+          "saucer_hidden"
+        ]
+      },
+      "start_camera": {
+        "azimuth_deg": 300,
+        "elevation_deg": 55
+      },
+      "occlusion_targets": [
+        {
+          "target_copy_id": "saucer_hidden",
+          "blocker_objects": [
+            "mushroom2_mushroom3_0"
+          ]
+        },
+        {
+          "target_copy_id": "cap_hidden",
+          "blocker_objects": [
+            "mushroom_and_mushroom_stool:mushroom_mushroom3_0"
+          ]
+        }
+      ],
+      "anchor_query": {
+        "relation": "nearest",
+        "reference_object": "carrot1_carrot_0",
+        "candidate_objects": [
+          "mushroom2_mushroom3_0",
+          "mushroom_and_mushroom_stool:mushroom_mushroom3_0"
+        ],
+        "answer_anchor_object": "mushroom2_mushroom3_0",
+        "target_copy_id": "saucer_hidden"
+      }
+    }
+  ],
+  "source": {
+    "uid": "a450b90cb444431d93c6e4bab70fa233",
+    "name": "Room diorama: Gnome/borrowers garden",
+    "tier": "simple",
+    "category": "庭院花园",
+    "author": "SonyaMead",
+    "license": "CC Attribution",
+    "source_url": "https://sketchfab.com/3d-models/a450b90cb444431d93c6e4bab70fa233",
+    "download_url": "https://huggingface.co/datasets/allenai/objaverse/resolve/main/glbs/000-091/a450b90cb444431d93c6e4bab70fa233.glb"
+  }
+}

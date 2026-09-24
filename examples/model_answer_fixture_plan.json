@@ -1,0 +1,212 @@
+{
+  "schema_version": "1.3",
+  "scene_id": "hidden",
+  "variants": [
+    {
+      "level": "simple",
+      "entities": [
+        {
+          "id": "bottle",
+          "kind": "bottle",
+          "objects": [
+            "Bottle"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        },
+        {
+          "id": "cup",
+          "kind": "cup",
+          "objects": [
+            "Cup"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        },
+        {
+          "id": "box",
+          "kind": "box",
+          "objects": [
+            "Box"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        }
+      ],
+      "copies": [
+        {
+          "id": "bottle_0",
+          "from": "bottle",
+          "xy": [
+            -1.0,
+            2.0
+          ],
+          "support_object": "Floor",
+          "pose": "upright",
+          "region": "floor"
+        }
+      ],
+      "question": {
+        "question_type": "count",
+        "mode": "count",
+        "kind": "bottle",
+      "text": "场景中共有几只瓶子？",
+        "declared_answer": 2,
+        "evidence_ids": [
+          "bottle",
+          "bottle_0"
+        ]
+      },
+      "start_camera": {
+        "azimuth_deg": 270,
+        "elevation_deg": 5
+      }
+    },
+    {
+      "level": "medium",
+      "entities": [
+        {
+          "id": "bottle",
+          "kind": "bottle",
+          "objects": [
+            "Bottle"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        },
+        {
+          "id": "cup",
+          "kind": "cup",
+          "objects": [
+            "Cup"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        },
+        {
+          "id": "box",
+          "kind": "box",
+          "objects": [
+            "Box"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        }
+      ],
+      "copies": [
+        {
+          "id": "cup_0",
+          "from": "cup",
+          "xy": [
+            -1.0,
+            2.0
+          ],
+          "support_object": "Floor",
+          "pose": "upright",
+          "region": "floor"
+        }
+      ],
+      "question": {
+        "question_type": "color",
+        "mode": "evidence",
+        "kind": "cup",
+        "text": "盒子后那只杯子是什么颜色？",
+        "declared_answer": "蓝色",
+        "evidence_ids": [
+          "cup_0"
+        ]
+      },
+      "start_camera": {
+        "azimuth_deg": 270,
+        "elevation_deg": 5
+      },
+      "occlusion_targets": [
+        {
+          "target_copy_id": "cup_0",
+          "blocker_objects": [
+            "Box"
+          ]
+        }
+      ]
+    },
+    {
+      "level": "hard",
+      "entities": [
+        {
+          "id": "bottle",
+          "kind": "bottle",
+          "objects": [
+            "Bottle"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        },
+        {
+          "id": "cup",
+          "kind": "cup",
+          "objects": [
+            "Cup"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        },
+        {
+          "id": "box",
+          "kind": "box",
+          "objects": [
+            "Box"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        }
+      ],
+      "copies": [
+        {
+          "id": "box_0",
+          "from": "box",
+          "xy": [
+            -1.0,
+            2.0
+          ],
+          "support_object": "Floor",
+          "pose": "upright",
+          "region": "floor"
+        }
+      ],
+      "question": {
+        "question_type": "identity",
+        "mode": "identify",
+        "kind": "box",
+        "answer_copy_id": "box_0",
+        "anchor_blocker_object": "Cup",
+        "text": "离瓶子最近的地标后面是什么？",
+        "declared_answer": "盒子",
+        "evidence_ids": [
+          "box_0"
+        ]
+      },
+      "start_camera": {
+        "azimuth_deg": 270,
+        "elevation_deg": 5
+      },
+      "occlusion_targets": [
+        {
+          "target_copy_id": "box_0",
+          "blocker_objects": [
+            "Cup"
+          ]
+        }
+      ],
+      "anchor_query": {
+        "relation": "nearest",
+        "reference_object": "Bottle",
+        "candidate_objects": [
+          "Cup",
+          "Box"
+        ],
+        "answer_anchor_object": "Cup",
+        "target_copy_id": "box_0"
+      }
+    }
+  ]
+}

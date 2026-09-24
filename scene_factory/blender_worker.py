@@ -130,12 +130,12 @@ def occlusion_evidence(camera, objects, blocker_names, blockers, scene_objects):
             "expected_blocker_objects": blocker_names}
 
 
-def render(objects, out, azimuth, elevation):
+def render(objects, out, azimuth, elevation, resolution=640):
     camera_for(objects, azimuth, elevation)
     scene = bpy.context.scene
     scene.render.engine = "BLENDER_EEVEE"
-    scene.render.resolution_x = 640
-    scene.render.resolution_y = 640
+    scene.render.resolution_x = resolution
+    scene.render.resolution_y = resolution
     scene.render.resolution_percentage = 100
     scene.render.image_settings.file_format = "PNG"
     scene.render.film_transparent = False
@@ -314,6 +314,31 @@ def build(source, out, plan_path):
                 else:
                     continue
                 break
+        evidence_views = {}
+        if plan.get("schema_version") == "1.3":
+            # Give the answering model both a broad revealed view and a focused
+            # target view. These are evidence, never automatic answer checks.
+            best = max(probes, key=lambda p: len(p["visible_copy_ids"]))
+            reveal_path = level_dir / "reveal.png"
+            render(augmented, reveal_path, best["azimuth_deg"], best["elevation_deg"], 512)
+            evidence_views["reveal"] = str(reveal_path)
+            target_id = next((eid for eid in variant["question"].get("evidence_ids", [])
+                              if eid in spawned), next(iter(spawned)))
+            target_objects = spawned[target_id]
+            detail_angle = None
+            for el in (20, 45, 70):
+                for az in range(0, 360, 45):
+                    local_cam = camera_for(target_objects, az, el)
+                    if any(visible_from(local_cam, obj) for obj in target_objects):
+                        detail_angle = (az, el)
+                        break
+                if detail_angle:
+                    break
+            if detail_angle:
+                detail_path = level_dir / "detail.png"
+                render(target_objects, detail_path, *detail_angle, resolution=512)
+                evidence_views["detail"] = str(detail_path)
+            evidence_views["target_copy_id"] = target_id
         # Export only imported source meshes and their native-geometry copies.
         bpy.ops.object.select_all(action="DESELECT")
         for obj in augmented:
@@ -329,6 +354,7 @@ def build(source, out, plan_path):
                        "start_visible_copies": start_vis, "view_probes": probes,
                        "occlusion_evidence": occlusion,
                        "anchor_query_evidence": anchor_evidence,
+                       "evidence_views": evidence_views,
                        "local_view_probes": local_probes,
                        "start_camera": cam})
     (out / "build_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2))

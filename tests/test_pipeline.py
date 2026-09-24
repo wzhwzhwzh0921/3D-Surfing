@@ -3,10 +3,11 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from scene_factory.schema import answer_from_registry, read_plan
+from scene_factory.schema import answer_from_model, answer_from_registry, read_plan
 from scene_factory.download import glb_header
 from scene_factory.gateway import normalize_usage
 from scene_factory.question_types import QUESTION_TYPES, type_order
+from scene_factory.runner import observed_evidence_reads
 
 
 def variant(level, kind, count):
@@ -139,6 +140,30 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(usage["input_tokens"], 100)
         self.assertEqual(usage["cached_tokens"], 80)
         self.assertAlmostEqual(usage["cache_hit_rate"], 0.8)
+
+    def test_v13_uses_model_answers_for_all_types(self):
+        sample = Path(__file__).resolve().parents[1] / "examples/model_answer_garden_plan.json"
+        plan = read_plan(sample)
+        self.assertEqual(plan["schema_version"], "1.3")
+        self.assertEqual([answer_from_model(v)["value"] for v in plan["variants"]],
+                         [5, "蓝色", "茶杯和茶碟"])
+        self.assertTrue(all(answer_from_model(v)["source"] == "model_visual"
+                            for v in plan["variants"]))
+        plan["variants"][0]["question"].pop("declared_answer")
+        self.path.write_text(json.dumps(plan))
+        with self.assertRaisesRegex(ValueError, "declared answer"):
+            read_plan(self.path)
+
+    def test_answer_views_must_be_opened_by_agent(self):
+        work = Path(self.temp.name)
+        stream = work / "claude_stream.jsonl"
+        stream.write_text(json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Read",
+             "input": {"file_path": "output/simple/reveal.png"}},
+            {"type": "tool_use", "name": "Bash",
+             "input": {"command": "cat output/hard/detail.png"}}
+        ]}}) + "\n")
+        self.assertEqual(observed_evidence_reads(stream, work), ["simple/reveal.png"])
 
 
 if __name__ == "__main__":

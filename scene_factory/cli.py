@@ -12,7 +12,7 @@ import sys
 
 from .download import glb_header
 from .runner import ROOT, blender, run_batch, run_one
-from .question_types import QUESTION_TYPES, AUTO_VERIFIED, type_order
+from .question_types import QUESTION_TYPES, type_order
 from .suitability import screen
 from .schema import read_plan
 from .validate import validate
@@ -27,10 +27,15 @@ def render_report(work: Path, output: Path) -> None:
     cards = []
     for r in validation["results"]:
         level = r["level"]
-        answer_label = "程序计算答案" if r.get("answer_verified", True) else "待审核模型答案"
+        answer_label = ("模型观察答案" if r["answer"].get("source") == "model_visual"
+                        else "程序计算答案" if r.get("answer_verified", True) else "待审核模型答案")
         img = os.path.relpath((work / "output" / level / "start.png").resolve(), output.parent.resolve())
         scene = os.path.relpath((work / "output" / level / "scene.glb").resolve(), output.parent.resolve())
+        extra_images = "".join(
+            f'<figure><img src="{html.escape(os.path.relpath((work / "output" / level / f"{name}.png").resolve(), output.parent.resolve()))}" alt="{name}"><figcaption>{"全景揭示视角" if name == "reveal" else "目标局部视角"}</figcaption></figure>'
+            for name in ("reveal", "detail") if (work / "output" / level / f"{name}.png").is_file())
         cards.append(f'<article><h2>{html.escape(level)}</h2><model-viewer src="{html.escape(scene)}" camera-controls auto-rotate shadow-intensity="1" alt="{level} 3D scene"></model-viewer><img src="{html.escape(img)}" alt="起始视角">'
+                     f'{extra_images}'
                      f'<p><b>题目：</b>{html.escape(r["question"])}</p>'
                      f'<p><b>{answer_label}：</b>{html.escape(str(r["answer"]["value"]))}</p>'
                      f'<p>起始视角隐藏副本 {len(r["hidden_copy_ids_at_start"])} 个；'
@@ -40,7 +45,7 @@ def render_report(work: Path, output: Path) -> None:
     page = """<!doctype html><html lang="zh"><meta charset="utf-8"><title>Scene QA</title>
 <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
 <style>body{font:16px system-ui;max-width:1200px;margin:30px auto;background:#eef1f5;color:#16212c}main{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:16px}article{background:white;padding:18px;border-radius:12px;box-shadow:0 2px 12px #0001}img,model-viewer{display:block;width:100%;aspect-ratio:1;object-fit:contain;background:#ddd}img{aspect-ratio:16/9}</style>
-<h1>场景增强审查页</h1><p>状态：""" + html.escape(validation["status"]) + """。标记「待审核模型答案」的题尚未自动核答案；自然性与实际操作数仍需人工/盲测复核。</p><main>""" + "\n".join(cards) + "</main></html>"
+<h1>场景增强审查页</h1><p>状态：""" + html.escape(validation["status"]) + """。标记「模型观察答案」的题由模型看图作答，程序只检查场景与视角条件，不核对答案；自然性与实际操作数仍需人工/盲测复核。</p><main>""" + "\n".join(cards) + "</main></html>"
     output.write_text(page)
 
 
@@ -119,8 +124,7 @@ def main() -> None:
             order = type_order(a.scene_id, a.seed)
             print(json.dumps({"scene_id": a.scene_id, "seed": a.seed,
                               "preferred": order[:3],
-                              "ordered_candidates": [{"id": kind, "name": QUESTION_TYPES[kind],
-                                                      "auto_verified": kind in AUTO_VERIFIED}
+                              "ordered_candidates": [{"id": kind, "name": QUESTION_TYPES[kind]}
                                                      for kind in order]}, ensure_ascii=False, indent=2))
         elif a.command == "list":
             rows = catalog_rows(a.catalog)
