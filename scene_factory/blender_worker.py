@@ -194,6 +194,24 @@ def build(source, out, plan_path):
         meshes = reset_import(source)
         original_names = {o.name for o in meshes}
         original_by_name = {o.name: o for o in meshes}
+        anchor_evidence = None
+        if variant.get("anchor_query"):
+            query = variant["anchor_query"]
+            names = [query["reference_object"], *query["candidate_objects"]]
+            if any(name not in original_by_name for name in names):
+                raise ValueError(f"Unknown anchor-query mesh in {names}")
+            def xy_center(name):
+                lo, hi = bounds([original_by_name[name]])
+                return ((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2)
+            rx, ry = xy_center(query["reference_object"])
+            distances = {name: math.dist((rx, ry), xy_center(name))
+                         for name in query["candidate_objects"]}
+            ranked = sorted(distances, key=distances.get)
+            anchor_evidence = {"relation": "nearest", "distances_xy": distances,
+                               "resolved_anchor_object": ranked[0],
+                               "margin_ratio": (distances[ranked[1]] - distances[ranked[0]]) /
+                                               max(distances[ranked[1]], 1e-8),
+                               "target_copy_id": query["target_copy_id"]}
         originals = {e["id"]: e for e in variant["entities"]}
         spawned = {}
         for entity in originals.values():
@@ -310,6 +328,7 @@ def build(source, out, plan_path):
                        "auto_adjustments": auto_adjustments,
                        "start_visible_copies": start_vis, "view_probes": probes,
                        "occlusion_evidence": occlusion,
+                       "anchor_query_evidence": anchor_evidence,
                        "local_view_probes": local_probes,
                        "start_camera": cam})
     (out / "build_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2))

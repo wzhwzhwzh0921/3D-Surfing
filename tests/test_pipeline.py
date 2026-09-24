@@ -6,6 +6,7 @@ import unittest
 from scene_factory.schema import answer_from_registry, read_plan
 from scene_factory.download import glb_header
 from scene_factory.gateway import normalize_usage
+from scene_factory.question_types import QUESTION_TYPES, type_order
 
 
 def variant(level, kind, count):
@@ -99,6 +100,37 @@ class PipelineTests(unittest.TestCase):
         hard["question"]["anchor_blocker_object"] = "Bottle"
         self.path.write_text(json.dumps(self.plan))
         with self.assertRaisesRegex(ValueError, "named occluding anchor"):
+            read_plan(self.path)
+
+    def test_ten_type_order_is_reproducible_and_complete(self):
+        first = type_order("scene-42", 7)
+        self.assertEqual(first, type_order("scene-42", 7))
+        self.assertEqual(set(first), set(QUESTION_TYPES))
+        self.assertEqual(len(first), 10)
+        self.assertNotEqual(first, type_order("scene-42", 8))
+
+    def test_v12_separates_type_from_difficulty_and_marks_draft_answer(self):
+        self.plan["schema_version"] = "1.2"
+        easy, medium, hard = self.plan["variants"]
+        easy["question"]["question_type"] = "count"
+        medium["occlusion_targets"] = [{"target_copy_id": "cup_0", "blocker_objects": ["Box"]}]
+        medium["question"] = {"question_type": "color", "mode": "evidence", "kind": "cup",
+                              "text": "杯子是什么颜色？", "declared_answer": "红色", "evidence_ids": ["cup_0"]}
+        hard["occlusion_targets"] = [{"target_copy_id": "box_1", "blocker_objects": ["Cup"]}]
+        hard["anchor_query"] = {"relation": "nearest", "reference_object": "Bottle",
+                                "candidate_objects": ["Cup", "Box"],
+                                "answer_anchor_object": "Cup", "target_copy_id": "box_1"}
+        hard["question"] = {"question_type": "identity", "mode": "identify", "kind": "box",
+                            "answer_copy_id": "box_1", "anchor_blocker_object": "Cup",
+                            "text": "离瓶子最近的地标后面是什么？"}
+        self.path.write_text(json.dumps(self.plan))
+        plan = read_plan(self.path)
+        self.assertEqual([v["question"]["question_type"] for v in plan["variants"]],
+                         ["count", "color", "identity"])
+        self.assertFalse(answer_from_registry(medium)["verified"])
+        hard["anchor_query"]["target_copy_id"] = "box_0"
+        self.path.write_text(json.dumps(self.plan))
+        with self.assertRaisesRegex(ValueError, "answer target must be occluded"):
             read_plan(self.path)
 
     def test_deepseek_cache_usage(self):

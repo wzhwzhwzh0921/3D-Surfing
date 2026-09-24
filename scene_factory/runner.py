@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from .download import copy_local, download
 from .gateway import gateway, summarize_usage
 from .openai_bridge import bridge
+from .question_types import QUESTION_TYPES, type_order
 from .schema import read_plan
 from .suitability import screen
 from .validate import validate
@@ -23,7 +24,7 @@ WORKER = Path(__file__).with_name("blender_worker.py")
 AGENT_SYSTEM = (
     "You are a production scene-QA planner. Use the supplied inventory, four previews, "
     "plan schema, and complete example as your interface. Decide suitability first. "
-    "If fewer than three distinct native small-prop categories can be augmented "
+    "If fewer than two distinct native small-prop categories can be augmented "
     "naturally, write unsuitable.json and stop. Otherwise write plan.json promptly, "
     "then invoke build and verify and revise the plan if needed. Do not proactively "
     "inspect framework source, scan the filesystem, install packages, or write custom "
@@ -69,11 +70,15 @@ def blender(mode: str, source: Path, output: Path, plan: Path | None = None, *, 
 
 
 def prompt_for(scene_id: str, work: Path) -> str:
+    seed = int(os.environ.get("SCENEQA_QUESTION_SEED", "0"))
+    order = type_order(scene_id, seed)
+    menu = ", ".join(f"{kind} ({QUESTION_TYPES[kind]})" for kind in order)
     return f"""You are preparing one 3D scene QA benchmark item in ONE session.
 Scene ID: {scene_id}. Work directory: {work}.
 The source is {work / 'source.glb'}. Inventory: {work / 'inspect/inventory.json'}.
 Four color previews are in {work / 'inspect'}; use Read on the PNGs.
-Create {work / 'plan.json'} following {ROOT / 'docs/PLAN_SCHEMA.md'}.
+Create {work / 'plan.json'} following {ROOT / 'docs/PLAN_SCHEMA.md'} and
+{ROOT / 'docs/QUESTION_TYPES.md'}. Use schema_version 1.2.
 Use {ROOT / 'examples/sample_plan.json'} only as a STRUCTURAL example; adapt every
 object name, location and question to this source. Read inventory and four previews.
 Do not inspect package source files, runner logs, task.txt, or status.json; the
@@ -85,24 +90,34 @@ No imported plush toys, props, color changes, invisible labels or unrelated deco
 Copy an object to natural physical support (table, shelf, floor, bench), usually behind
 existing occluders. Explicitly list all relevant ORIGINAL instances in entities;
 include every matching original, even hidden ones. Keep source geometry and materials.
-The three questions must have different target kinds and answers. Use Chinese natural
-questions. Simple is a count, medium a conditional count using pose/region, and
-hard should preferably identify an object under one named local occluder while
-placing a different distractor under another; comparison is also allowed. Medium
-difficulty must come from VISUAL OCCLUSION,
-not from adding many targets: use at most two target copies, place at least one
-behind a nearby native scene prop, and declare occlusion_targets with its exact
-blocker mesh name(s). Use schema_version 1.1. The builder raycasts target surface
+QUESTION TYPES AND RANDOMIZATION: This scene's reproducible seed is {seed}.
+The randomized type order is: {menu}.
+Prefer the first THREE feasible types in that order, assign one to each difficulty
+independently, and use a different question_type for each. If a type is infeasible,
+skip it and explain why in agent_notes.md. Do not force scene-inappropriate props.
+The same type may be simple, medium or hard in OTHER scenes; types are not tied to tiers.
+For count use mode count/compare; for identity use mode identify. The other eight
+types use mode evidence with declared_answer and evidence_ids, and will be marked
+needs_review rather than certified candidate until a typed verifier is added.
+Use natural Chinese questions and keep three answers distinct.
+
+DIFFICULTY: Simple gives a direct target but hides critical evidence at the start.
+Medium gives a direct target/anchor but requires overcoming VISUAL OCCLUSION:
+use at most two target copies, place at least one behind a nearby natural scene
+prop, and declare occlusion_targets with exact blocker mesh name(s). The builder raycasts target surface
 samples and requires at least 35% blocked by that named prop at the start view;
 the blocker must be small relative to the scene and close to the target, so a
-perimeter wall alone is not sufficient. Hard needs at least TWO distinct nearby
-occluders and two hidden targets; the answer target must be tied to a named anchor.
-Place enough copies to meet the visibility gate: at least 1 / 1 / 2 hidden from
-start for simple / medium / hard. Choose an explicit
+perimeter wall alone is not sufficient. Hard adds ONE REASONING HOP: first resolve
+a unique nearest anchor from a named reference and at least two candidate scene
+objects, then move to that anchor and overcome local occlusion. Declare
+anchor_query with relation=nearest, reference_object, candidate_objects,
+answer_anchor_object, target_copy_id. The target must be occluded by the resolved
+answer anchor. A second hidden decoy is optional; more objects alone do not make
+the question hard. Place at least one hidden copy in each tier. Choose an explicit
 start camera so the answer is not directly available. All copies must be discoverable
 from a global orbit or from a focused, zoomed local view. Hard need not claim
 30 actions without blind test.
-If fewer than THREE distinct, small, naturally repeatable native object categories
+If fewer than TWO distinct, small, naturally repeatable native object categories
 exist, do not invent kinds such as whole buildings, walls, structural beams,
 ground or water merely to fill the quota. Instead write {work / 'unsuitable.json'}
 with {{"status":"unsuitable","reasons":["..."],"available_native_categories":["..."]}}
@@ -126,8 +141,9 @@ def run_one(row: dict, output_root: Path, *, source_path: Path | None = None,
     validation_path = output / "validation.json"
     if validation_path.exists() and not force:
         old = json.loads(validation_path.read_text())
-        if old.get("status") == "candidate":
-            return {"scene_id": scene_id, "status": "skipped", "work": str(work)}
+        if old.get("status") in ("candidate", "needs_review"):
+            return {"scene_id": scene_id, "status": old["status"], "skipped": True,
+                    "work": str(work)}
     status_file = work / "status.json"
     if status_file.exists() and not force:
         old_status = json.loads(status_file.read_text())
@@ -227,6 +243,11 @@ def run_one(row: dict, output_root: Path, *, source_path: Path | None = None,
         plan = read_plan(plan_path)
         plan["scene_id"] = scene_id
         plan["source"] = state["source"]
+        if plan["schema_version"] == "1.2":
+            seed = int(os.environ.get("SCENEQA_QUESTION_SEED", "0"))
+            plan["type_selection"] = {"seed": seed,
+                                      "ordered_candidates": type_order(scene_id, seed),
+                                      "selected": [v["question"]["question_type"] for v in plan["variants"]]}
         plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2))
         # Build/verify once more outside the agent session so agent claims are not trusted.
         blender("build", source, output, plan_path)

@@ -12,6 +12,7 @@ import sys
 
 from .download import glb_header
 from .runner import ROOT, blender, run_batch, run_one
+from .question_types import QUESTION_TYPES, AUTO_VERIFIED, type_order
 from .suitability import screen
 from .schema import read_plan
 from .validate import validate
@@ -26,11 +27,12 @@ def render_report(work: Path, output: Path) -> None:
     cards = []
     for r in validation["results"]:
         level = r["level"]
+        answer_label = "程序计算答案" if r.get("answer_verified", True) else "待审核模型答案"
         img = os.path.relpath((work / "output" / level / "start.png").resolve(), output.parent.resolve())
         scene = os.path.relpath((work / "output" / level / "scene.glb").resolve(), output.parent.resolve())
         cards.append(f'<article><h2>{html.escape(level)}</h2><model-viewer src="{html.escape(scene)}" camera-controls auto-rotate shadow-intensity="1" alt="{level} 3D scene"></model-viewer><img src="{html.escape(img)}" alt="起始视角">'
                      f'<p><b>题目：</b>{html.escape(r["question"])}</p>'
-                     f'<p><b>程序计算答案：</b>{html.escape(str(r["answer"]["value"]))}</p>'
+                     f'<p><b>{answer_label}：</b>{html.escape(str(r["answer"]["value"]))}</p>'
                      f'<p>起始视角隐藏副本 {len(r["hidden_copy_ids_at_start"])} 个；'
                      f'全局或局部换焦可发现：{"是" if r["all_copies_discoverable"] else "否"}；'
                      f'局部证据 {len(r.get("local_view_probes", []))} 个</p>'
@@ -38,7 +40,7 @@ def render_report(work: Path, output: Path) -> None:
     page = """<!doctype html><html lang="zh"><meta charset="utf-8"><title>Scene QA</title>
 <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
 <style>body{font:16px system-ui;max-width:1200px;margin:30px auto;background:#eef1f5;color:#16212c}main{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:16px}article{background:white;padding:18px;border-radius:12px;box-shadow:0 2px 12px #0001}img,model-viewer{display:block;width:100%;aspect-ratio:1;object-fit:contain;background:#ddd}img{aspect-ratio:16/9}</style>
-<h1>场景增强候选集</h1><p>这是可视化审查页；自然性、原始物件清点和实际所需操作数仍需人工/盲测复核。</p><main>""" + "\n".join(cards) + "</main></html>"
+<h1>场景增强审查页</h1><p>状态：""" + html.escape(validation["status"]) + """。标记「待审核模型答案」的题尚未自动核答案；自然性与实际操作数仍需人工/盲测复核。</p><main>""" + "\n".join(cards) + "</main></html>"
     output.write_text(page)
 
 
@@ -46,6 +48,9 @@ def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="sceneqa")
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("doctor")
+    types = sub.add_parser("types", help="Preview reproducible 10-type order for one scene")
+    types.add_argument("--scene-id", required=True)
+    types.add_argument("--seed", type=int, default=0)
     listing = sub.add_parser("list")
     listing.add_argument("--catalog", type=Path, default=ROOT / "catalog/qualified.jsonl")
     listing.add_argument("--tier", choices=["simple", "complex"])
@@ -110,6 +115,13 @@ def main() -> None:
                     "catalog_rows": len(catalog_rows(ROOT / "catalog/qualified.jsonl")),
                     "free_disk_bytes": shutil.disk_usage(Path.cwd()).free}
             print(json.dumps(info, ensure_ascii=False, indent=2))
+        elif a.command == "types":
+            order = type_order(a.scene_id, a.seed)
+            print(json.dumps({"scene_id": a.scene_id, "seed": a.seed,
+                              "preferred": order[:3],
+                              "ordered_candidates": [{"id": kind, "name": QUESTION_TYPES[kind],
+                                                      "auto_verified": kind in AUTO_VERIFIED}
+                                                     for kind in order]}, ensure_ascii=False, indent=2))
         elif a.command == "list":
             rows = catalog_rows(a.catalog)
             if a.tier:
@@ -157,6 +169,7 @@ def main() -> None:
                                key_file=a.key_file, upstream=a.upstream, model=a.model,
                                preflight=not a.no_preflight)
             print(json.dumps({"total": len(result), "candidate": sum(x["status"] == "candidate" for x in result),
+                              "needs_review": sum(x["status"] == "needs_review" for x in result),
                               "unsuitable": sum(x["status"] == "unsuitable" for x in result),
                               "failed": sum(x["status"] == "failed" for x in result),
                               "results": result}, ensure_ascii=False, indent=2))

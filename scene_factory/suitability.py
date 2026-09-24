@@ -38,7 +38,7 @@ def screen(inventory: dict) -> dict:
     generic = [n for n in names if n and n.split()[0] in GENERIC]
     # A mesh may be generically named despite representing a useful prop. Avoid
     # rejecting such assets without a visual look.
-    status = "likely_unsuitable" if len(categories) < 3 and not generic else "needs_agent_review"
+    status = "likely_unsuitable" if len(categories) < 2 and not generic else "needs_agent_review"
     return {"status": status, "named_prop_categories": categories,
             "generic_mesh_count": len(generic), "mesh_count": len(names),
-            "rule": "fewer than three distinct nonstructural named kinds; generic names are exempt"}
+            "rule": "fewer than two distinct nonstructural named kinds; generic names are exempt"}

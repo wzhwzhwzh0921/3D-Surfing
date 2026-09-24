@@ -12,3 +12,7 @@
 这些实验还暴露语义风险：Gnome **初次草案**把原网格名含 `wormie` 的物件称为“企鹅”。程序会列出这种命名不一致，但不能据此自动确认物体类别；需要看图审核。最终全新试验的三档没有这类命名警告，但仍需人工检查原物件计数和摆放自然性。`candidate` 不意味着 gold answer 或 30 次操作难度已验证。
 
 模拟上游服务测试覆盖了 Claude Code CLI → 本地协议桥 → OpenAI Chat Completions → 流式 Anthropic 响应，含图片、工具调用、65,536 输出 token 上限、缓存统计和 429 后重试。真实试跑期间没有发生 429，因此真实 429 的等待时长尚未实测。
+
+## 1.2 协议的构建验收
+
+`examples/ten_by_three_garden_plan.json` 是手工编写的 10 类题型协议样例，沿用 garden 场景原始 GLB。它没有经过 DeepSeek 自动规划；用途是验证新版结构、三次独立导出和判定逻辑。实际 Blender 构建与 `sceneqa verify` 均完成：简单题 `count` 答案 5，困难题 `identity` 答案为 `teacup_and_saucer`，程序均可从注册表与地标关系核对；中等题 `color` 的“蓝色”由样例计划声明，程序无法核实颜色语义。三档可见性检查均通过，困难题的最近地标距离分别约为 6.94 和 13.23（世界 XY 单位）。因此总状态是 `needs_review`，不是正式 gold。新版 10 类随机选择是否能由 DeepSeek 稳定完成，仍需单独实测。

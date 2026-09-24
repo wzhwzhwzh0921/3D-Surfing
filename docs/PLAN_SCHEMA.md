@@ -1,42 +1,48 @@
 # 单场景三档增强计划格式
 
-`plan.json` 必须是 UTF-8 JSON。世界坐标和对象名来自 `inspect/inventory.json`。三档从同一个原始 GLB 独立构建，不能在上一档上叠加。`entities` 必须穷举与题目有关的**原始**物件；`copies` 只引用这些物件。程序按注册表算答案，但原始物件是否清点完整仍须独立复核。新任务使用 `schema_version: "1.1"`；`1.0` 只用于读取早期样例。
+新运行使用 `schema_version: "1.2"`。一个原始 GLB 生成简单、中等、困难三个**独立**版本，每档一种不同的 `question_type`，类型须来自 [10 × 3 题型表](QUESTION_TYPES.md)。旧版 `1.0/1.1` 仍可读取，用来复核历史产物。
 
 ```json
 {
-  "schema_version": "1.1",
+  "schema_version": "1.2",
   "scene_id": "example",
   "variants": [
     {
       "level": "simple",
-      "entities": [
-        {"id": "bottle_original", "kind": "bottle", "objects": ["BottleMesh"], "pose": "upright", "region": "shelf"},
-        {"id": "cup_original", "kind": "cup", "objects": ["CupMesh"], "region": "shelf"}
-      ],
-      "copies": [
-        {"id": "bottle_added_1", "from": "bottle_original", "xy": [0.3, 1.2], "support_object": "ShelfTop", "yaw_deg": 30, "pose": "upright", "region": "shelf"}
-      ],
-      "question": {"mode": "count", "kind": "bottle", "text": "架子上共有多少个直立的瓶子？", "pose": "upright", "region": "shelf"},
+      "entities": [{"id": "coin_a", "kind": "coin", "objects": ["CoinMesh"], "region": "lawn"}],
+      "copies": [{"id": "coin_hidden", "from": "coin_a", "xy": [0.3, 1.2], "support_object": "Ground", "region": "lawn"}],
+      "question": {"question_type": "count", "mode": "count", "kind": "coin", "text": "草坪上有几枚硬币？", "region": "lawn"},
       "start_camera": {"azimuth_deg": 20, "elevation_deg": 30}
     },
-    {"level": "medium", "entities": [], "copies": [], "question": {}, "start_camera": {},
-     "occlusion_targets": [{"target_copy_id": "目标复制件 ID", "blocker_objects": ["原场景内用作遮挡物的 mesh 名称"]}]},
-    {"level": "hard", "entities": [], "copies": [], "question": {}, "start_camera": {}, "occlusion_targets": []}
+    {
+      "level": "medium",
+      "entities": [], "copies": [], "question": {}, "start_camera": {},
+      "occlusion_targets": [{"target_copy_id": "复制件 ID", "blocker_objects": ["近处遮挡物的原始 mesh 名"]}]
+    },
+    {
+      "level": "hard",
+      "entities": [], "copies": [], "question": {}, "start_camera": {},
+      "occlusion_targets": [{"target_copy_id": "答案复制件 ID", "blocker_objects": ["MushroomNearCarrot"]}],
+      "anchor_query": {
+        "relation": "nearest", "reference_object": "CarrotMesh",
+        "candidate_objects": ["MushroomNearCarrot", "MushroomNearGate"],
+        "answer_anchor_object": "MushroomNearCarrot", "target_copy_id": "答案复制件 ID"
+      }
+    }
   ]
 }
 ```
 
-上方仅说明字段，空的中、难档不是有效计划。中档用 `pose` 或 `region` 作为条件；难档可用比较题 `{"mode":"compare","kind":"A","other_kind":"B","text":"A 和 B 哪种更多？"}`，也可用遮挡识别题：
+中、困难档的空 `entities/copies/question` 只是字段示意，不能直接运行。对象名必须来自 `inspect/inventory.json`。`entities` 要穷举与题目有关的原始实例；`copies` 从它们复制并贴合指定支撑面。原始实例是否清点完整仍需人工复核。
 
-```json
-{"mode":"identify", "kind":"saucer", "answer_copy_id":"saucer_hidden",
- "anchor_blocker_object":"mushroom_near_carrot", "text":"靠近胡萝卜的小蘑菇下是什么？"}
-```
+`question` 的答案模式：
 
-识别题的 `answer_copy_id` 必须是实际导出的复制件，并在 `occlusion_targets` 中与指定锚点绑定。难档至少两个不同目标、两个不同近处遮挡物；只在一个角落藏一个物体不算难档。比较答案为较多的 `kind`，数量相同则是 `equal`。三档的目标 `kind` 和题目文本都必须不同，最终答案也必须不同。复制件的 `xy` 是支撑面的水平坐标，程序向下射线求接触高度；不接受浮空手填 `z`。
+| 题型 | `mode` | 必要字段 | 程序处理 |
+|---|---|---|---|
+| `count` | `count` 或 `compare` | `kind`、可选 `pose/region`、比较时 `other_kind` | 根据注册表算答案 |
+| `identity` | `identify` | `kind`、`answer_copy_id`、`anchor_blocker_object` | 根据复制源 mesh 及地标绑定算答案 |
+| 其他八类 | `evidence` | `kind`、`declared_answer`、`evidence_ids` | 只保存草稿；标 `needs_review`，绝不当已验证 gold |
 
-**中档 1.1 的重点是视觉遮挡。** 只新增 1–2 个目标物件，至少一个放在场景原有的、语义自然的近处道具后面（例如蘑菇伞盖、花盆、长椅），而不是靠围墙把整个场景挡住。`occlusion_targets` 指定目标复制件和遮挡它的原始 mesh 名。构建器从起始相机向目标表面采样射线；至少 10 条有效射线中，指定遮挡物必须挡住不少于 35%，遮挡物的水平跨度不超过场景的 45%，并且其命中位置与目标足够近。同时，该目标不能在起始视角直接被粗粒度可见性探针发现，且换视角后必须可发现。这个射线门槛是视觉难度的代理指标，最终仍需看图、盲测。
+**难度与题型正交：** 三档均可选择 10 类中可行的一类；相同类型可在不同场景出不同难度。简单题的答案证据在起始视角不可见。中等题最多新增两个目标，至少一个必须被近处自然物体明显挡住。困难题先由 `anchor_query` 在至少两个候选地标中唯一选出最近的地标，再去该地标绕开局部遮挡寻找答案。困难档的第二个遮挡目标/干扰项可以增加辨别力，但不是硬性要求。程序用目标表面射线检测遮挡：至少 10 条有效射线，指定物件阻挡不少于 35%，遮挡物的水平跨度不超过场景 45%，而且它距目标不能过远。`anchor_query` 计算候选 mesh 中心的世界 XY 距离，最近与次近至少相差次近距离的 15%。
 
-简单 / 中等 / 困难起始视角分别至少遮住 1 / 1 / 2 个复制件，并确保全部复制件能由 24 个全局环绕视角，或由局部换焦、放大后的视角发现。题型扩展路线和答案校验边界见 [五类题型](QUESTION_TYPES.md)。
-
-本协议先支持 **原场景物件复制、数量和比较题**。它有意不把 VLM 自报答案当真，也不把视角覆盖等同于「至少 30 次操作」。人工复核必须检查自然性、原始实例完整性、题意和实际解题轨迹。
+`evidence` 模式的 `declared_answer` 来自模型，**未经过客观答案器复核**。管线仍可导出 GLB、题目、起始视角和待审核答案，但状态必须是 `needs_review`；只有全部题目有可计算答案并通过几何/遮挡检查时才是 `candidate`。人工 gold 还需要审查自然性、颜色纹理语义、地标是否清楚和盲测轨迹。视角覆盖不等于「至少 30 次工具调用」。

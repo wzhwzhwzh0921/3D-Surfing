@@ -4,19 +4,21 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from .question_types import QUESTION_TYPES
+
 LEVELS = ("simple", "medium", "hard")
 
 
 def read_plan(path: str | Path) -> dict:
     plan = json.loads(Path(path).read_text(encoding="utf-8"))
-    if plan.get("schema_version") not in ("1.0", "1.1"):
-        raise ValueError("schema_version must be 1.0 or 1.1")
+    if plan.get("schema_version") not in ("1.0", "1.1", "1.2"):
+        raise ValueError("schema_version must be 1.0, 1.1 or 1.2")
     variants = plan.get("variants")
     if not isinstance(variants, list) or len(variants) != 3:
         raise ValueError("Exactly three variants are required")
     if [v.get("level") for v in variants] != list(LEVELS):
         raise ValueError("Variant order must be simple, medium, hard")
-    kinds, questions = [], []
+    kinds, questions, question_types = [], [], []
     for v in variants:
         level = v["level"]
         entities = v.get("entities")
@@ -47,13 +49,13 @@ def read_plan(path: str | Path) -> dict:
                 raise ValueError(f"{level}: copy needs world-space xy")
             if not c.get("support_object"):
                 raise ValueError(f"{level}: copy needs named support surface")
-        if level in ("medium", "hard") and plan["schema_version"] == "1.1":
+        if level in ("medium", "hard") and plan["schema_version"] in ("1.1", "1.2"):
             if level == "medium" and len(copies) > 2:
                 raise ValueError("medium: use at most two new targets; difficulty should come from occlusion")
             occlusion_targets = v.get("occlusion_targets")
             if not isinstance(occlusion_targets, list) or not occlusion_targets:
                 raise ValueError(f"{level}: declare occlusion targets")
-            if level == "hard" and (len(occlusion_targets) < 2 or len({
+            if level == "hard" and plan["schema_version"] == "1.1" and (len(occlusion_targets) < 2 or len({
                 t.get("target_copy_id") for t in occlusion_targets}) < 2):
                 raise ValueError("hard: at least two distinct hidden targets are required")
             for target in occlusion_targets:
@@ -64,12 +66,44 @@ def read_plan(path: str | Path) -> dict:
                     not isinstance(name, str) or not name for name in blockers
                 ):
                     raise ValueError(f"{level}: list the original mesh objects that act as blockers")
-            if level == "hard" and len({name for t in occlusion_targets
+            if level == "hard" and plan["schema_version"] == "1.1" and len({name for t in occlusion_targets
                                         for name in t["blocker_objects"]}) < 2:
                 raise ValueError("hard: use at least two distinct local occluders")
+        if level == "hard" and plan["schema_version"] == "1.2":
+            anchor = v.get("anchor_query", {})
+            candidates = anchor.get("candidate_objects")
+            if anchor.get("relation") != "nearest" or not isinstance(candidates, list) or len(set(candidates)) < 2:
+                raise ValueError("hard: nearest anchor query needs two distinct candidate objects")
+            if anchor.get("answer_anchor_object") not in candidates or not anchor.get("reference_object"):
+                raise ValueError("hard: anchor query must name its reference and answer anchor")
+            if anchor.get("target_copy_id") not in copy_ids or not any(
+                t["target_copy_id"] == anchor["target_copy_id"] and
+                anchor["answer_anchor_object"] in t["blocker_objects"]
+                for t in v["occlusion_targets"]
+            ):
+                raise ValueError("hard: answer target must be occluded by the resolved anchor")
         q = v.get("question", {})
-        if q.get("mode") not in ("count", "compare", "identify") or not q.get("text"):
-            raise ValueError(f"{level}: count/compare/identify question and text required")
+        if q.get("mode") not in ("count", "compare", "identify", "evidence") or not q.get("text"):
+            raise ValueError(f"{level}: question mode and text required")
+        if plan["schema_version"] == "1.2":
+            question_type = q.get("question_type")
+            if question_type not in QUESTION_TYPES:
+                raise ValueError(f"{level}: question_type must be one of the ten catalog types")
+            if question_type == "count" and q["mode"] not in ("count", "compare"):
+                raise ValueError(f"{level}: count type needs count/compare mode")
+            if question_type == "identity" and q["mode"] != "identify":
+                raise ValueError(f"{level}: identity type needs identify mode")
+            if question_type not in ("count", "identity") and q["mode"] != "evidence":
+                raise ValueError(f"{level}: this question type needs an evidence draft")
+            question_types.append(question_type)
+        if q["mode"] == "evidence":
+            if plan["schema_version"] != "1.2" or q.get("declared_answer") in (None, ""):
+                raise ValueError(f"{level}: evidence draft needs a declared answer")
+            evidence_ids = q.get("evidence_ids")
+            if not isinstance(evidence_ids, list) or not evidence_ids or any(
+                eid not in set(ids) | set(copy_ids) for eid in evidence_ids
+            ):
+                raise ValueError(f"{level}: evidence_ids must refer to declared objects or copies")
         if q.get("kind") not in {e["kind"] for e in entities}:
             raise ValueError(f"{level}: target kind absent from entity registry")
         if q["mode"] == "compare" and q.get("other_kind") not in {e["kind"] for e in entities}:
@@ -83,7 +117,7 @@ def read_plan(path: str | Path) -> dict:
                 hidden_kinds = {entity_index[c["from"]]["kind"] for c in copies if c["id"] in hidden_ids}
                 if len(hidden_kinds) < 2:
                     raise ValueError("hard: identify requires a different hidden distractor kind")
-            if plan["schema_version"] == "1.1" and not any(
+            if plan["schema_version"] in ("1.1", "1.2") and not any(
                 t["target_copy_id"] == answer_copy["id"] and
                 q.get("anchor_blocker_object") in t["blocker_objects"]
                 for t in v.get("occlusion_targets", [])
@@ -91,6 +125,10 @@ def read_plan(path: str | Path) -> dict:
                 raise ValueError(f"{level}: identify answer must be tied to its named occluding anchor")
         if level == "hard" and plan["schema_version"] == "1.0" and q["mode"] != "compare":
             raise ValueError("hard: use a comparison requiring two groups")
+        if level == "hard" and plan["schema_version"] == "1.2" and q["mode"] == "identify" and (
+            q["answer_copy_id"] != v["anchor_query"]["target_copy_id"]
+        ):
+            raise ValueError("hard: identify answer must match the resolved anchor target")
         cam = v.get("start_camera", {})
         if not isinstance(cam.get("azimuth_deg"), (int, float)) or not isinstance(cam.get("elevation_deg"), (int, float)):
             raise ValueError(f"{level}: explicit starting camera required")
@@ -98,8 +136,13 @@ def read_plan(path: str | Path) -> dict:
             raise ValueError(f"{level}: starting elevation must be 5..80 degrees")
         kinds.append(q["kind"])
         questions.append(q["text"].strip())
-    if len(set(kinds)) != 3 or len(set(questions)) != 3:
-        raise ValueError("Three variants must target different object kinds and question text")
+    if len(set(questions)) != 3:
+        raise ValueError("Three variants must have different question text")
+    if plan["schema_version"] == "1.2":
+        if len(set(question_types)) != 3:
+            raise ValueError("Three variants must use different question types")
+    elif len(set(kinds)) != 3:
+        raise ValueError("Three variants must target different object kinds")
     return plan
 
 
@@ -113,6 +156,9 @@ def answer_from_registry(variant: dict) -> dict:
                          "pose": c.get("pose", original.get("pose")),
                          "region": c.get("region", original.get("region"))})
     q = variant["question"]
+    if q["mode"] == "evidence":
+        return {"value": q["declared_answer"], "derivation": "model-declared draft; human/typed verification required",
+                "evidence_ids": q["evidence_ids"], "verified": False}
     if q["mode"] == "identify":
         chosen = next(e for e in entities if e["id"] == q["answer_copy_id"])
         return {"value": chosen["kind"], "derivation": "copied target tied to named occluding anchor",
