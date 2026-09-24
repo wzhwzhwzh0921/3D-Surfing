@@ -1,0 +1,203 @@
+{
+  "schema_version": "1.0",
+  "scene_id": "hidden",
+  "variants": [
+    {
+      "level": "simple",
+      "entities": [
+        {
+          "id": "bottle",
+          "kind": "bottle",
+          "objects": [
+            "Bottle"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        },
+        {
+          "id": "cup",
+          "kind": "cup",
+          "objects": [
+            "Cup"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        },
+        {
+          "id": "box",
+          "kind": "box",
+          "objects": [
+            "Box"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        }
+      ],
+      "copies": [
+        {
+          "id": "bottle_0",
+          "from": "bottle",
+          "xy": [
+            -1.0,
+            2.0
+          ],
+          "support_object": "Floor",
+          "pose": "upright",
+          "region": "floor"
+        }
+      ],
+      "question": {
+        "mode": "count",
+        "kind": "bottle",
+        "text": "地面上共有多少个瓶子？"
+      },
+      "start_camera": {
+        "azimuth_deg": 270,
+        "elevation_deg": 5
+      }
+    },
+    {
+      "level": "medium",
+      "entities": [
+        {
+          "id": "bottle",
+          "kind": "bottle",
+          "objects": [
+            "Bottle"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        },
+        {
+          "id": "cup",
+          "kind": "cup",
+          "objects": [
+            "Cup"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        },
+        {
+          "id": "box",
+          "kind": "box",
+          "objects": [
+            "Box"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        }
+      ],
+      "copies": [
+        {
+          "id": "cup_0",
+          "from": "cup",
+          "xy": [
+            -1.0,
+            2.0
+          ],
+          "support_object": "Floor",
+          "pose": "upright",
+          "region": "floor"
+        },
+        {
+          "id": "cup_1",
+          "from": "cup",
+          "xy": [
+            0.19999999999999996,
+            2.0
+          ],
+          "support_object": "Floor",
+          "pose": "upright",
+          "region": "floor"
+        }
+      ],
+      "question": {
+        "mode": "count",
+        "kind": "cup",
+        "text": "地面上直立的杯子共有多少个？",
+        "pose": "upright"
+      },
+      "start_camera": {
+        "azimuth_deg": 270,
+        "elevation_deg": 5
+      }
+    },
+    {
+      "level": "hard",
+      "entities": [
+        {
+          "id": "bottle",
+          "kind": "bottle",
+          "objects": [
+            "Bottle"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        },
+        {
+          "id": "cup",
+          "kind": "cup",
+          "objects": [
+            "Cup"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        },
+        {
+          "id": "box",
+          "kind": "box",
+          "objects": [
+            "Box"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        }
+      ],
+      "copies": [
+        {
+          "id": "box_0",
+          "from": "box",
+          "xy": [
+            -1.0,
+            2.0
+          ],
+          "support_object": "Floor",
+          "pose": "upright",
+          "region": "floor"
+        },
+        {
+          "id": "box_1",
+          "from": "box",
+          "xy": [
+            0.19999999999999996,
+            2.0
+          ],
+          "support_object": "Floor",
+          "pose": "upright",
+          "region": "floor"
+        },
+        {
+          "id": "box_2",
+          "from": "box",
+          "xy": [
+            1.4,
+            2.0
+          ],
+          "support_object": "Floor",
+          "pose": "upright",
+          "region": "floor"
+        }
+      ],
+      "question": {
+        "mode": "compare",
+        "kind": "box",
+        "text": "箱子和杯子，哪一种数量更多？",
+        "other_kind": "cup"
+      },
+      "start_camera": {
+        "azimuth_deg": 270,
+        "elevation_deg": 5
+      }
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scene-qa-factory"
+version = "0.1.0"
+description = "Batch production of three navigable 3D scene QA variants per source GLB"
+requires-python = ">=3.10"
+dependencies = ["requests>=2.31"]
+
+[project.scripts]
+sceneqa = "scene_factory.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["scene_factory*"]
