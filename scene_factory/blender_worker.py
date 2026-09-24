@@ -80,6 +80,56 @@ def visible_from(camera, obj):
     return False
 
 
+def occlusion_evidence(camera, objects, blocker_names, blockers, scene_objects):
+    """Measure whether native scene geometry hides target surface samples at start."""
+    from bpy_extras.object_utils import world_to_camera_view
+    scene = bpy.context.scene
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    sampled = 0
+    blocked = 0
+    hit_names = {}
+    gaps = []
+    scene_lo, scene_hi = bounds(scene_objects)
+    target_lo, target_hi = bounds(objects)
+    scene_span = max(scene_hi[0] - scene_lo[0], scene_hi[1] - scene_lo[1], 0.001)
+    scene_diagonal = (Vector(scene_hi) - Vector(scene_lo)).length
+    target_span = max(target_hi[0] - target_lo[0], target_hi[1] - target_lo[1])
+    blocker_bounds = [bounds([obj]) for obj in blockers]
+    blocker_width_ratio = max(max(hi[i] - lo[i] for i in (0, 1))
+                              for lo, hi in blocker_bounds) / scene_span
+    gap_limit = max(scene_diagonal * 0.15, target_span * 1.5)
+    for obj in objects:
+        vertices = obj.data.vertices
+        step = max(1, len(vertices) // 48)
+        for index in range(0, len(vertices), step):
+            if sampled >= 48:
+                break
+            vertex = vertices[index]
+            target = obj.matrix_world @ vertex.co
+            ndc = world_to_camera_view(scene, camera, target)
+            if not (0 <= ndc.x <= 1 and 0 <= ndc.y <= 1 and ndc.z > 0):
+                continue
+            direction = target - camera.location
+            distance = direction.length
+            if distance <= 0.001:
+                continue
+            sampled += 1
+            hit, hit_location, _, _, hit_obj, _ = scene.ray_cast(
+                depsgraph, camera.location, direction.normalized(), distance=distance - 0.001)
+            if hit and hit_obj not in objects:
+                hit_names[hit_obj.name] = hit_names.get(hit_obj.name, 0) + 1
+                if hit_obj.name in blocker_names:
+                    blocked += 1
+                    gaps.append((target - hit_location).length)
+    return {"samples": sampled, "blocked_samples": blocked,
+            "blocked_fraction": round(blocked / sampled, 4) if sampled else 0,
+            "first_hit_objects": hit_names,
+            "mean_blocker_gap": round(sum(gaps) / len(gaps), 4) if gaps else None,
+            "max_allowed_gap": round(gap_limit, 4),
+            "blocker_width_ratio": round(blocker_width_ratio, 4),
+            "expected_blocker_objects": blocker_names}
+
+
 def render(objects, out, azimuth, elevation):
     camera_for(objects, azimuth, elevation)
     scene = bpy.context.scene
@@ -215,6 +265,14 @@ def build(source, out, plan_path):
         render(augmented, level_dir / "start.png", start_az, start_el)
         start_cam = camera_for(augmented, start_az, start_el)
         start_vis = {cid: any(visible_from(start_cam, o) for o in objects) for cid, objects in spawned.items()}
+        occlusion = {}
+        for requirement in variant.get("occlusion_targets", []):
+            cid = requirement["target_copy_id"]
+            blockers = requirement["blocker_objects"]
+            if any(name not in original_by_name for name in blockers):
+                raise ValueError(f"Unknown native occluder in {blockers}")
+            occlusion[cid] = occlusion_evidence(start_cam, spawned[cid], blockers,
+                                               [original_by_name[name] for name in blockers], augmented)
         probes = []
         for el in (20, 45, 70):
             for az in range(0, 360, 45):
@@ -251,6 +309,7 @@ def build(source, out, plan_path):
                        "copy_bounds": copy_bounds, "copy_collisions": collisions,
                        "auto_adjustments": auto_adjustments,
                        "start_visible_copies": start_vis, "view_probes": probes,
+                       "occlusion_evidence": occlusion,
                        "local_view_probes": local_probes,
                        "start_camera": cam})
     (out / "build_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2))

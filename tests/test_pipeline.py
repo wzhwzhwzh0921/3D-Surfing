@@ -65,6 +65,21 @@ class PipelineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Not a binary"):
             glb_header(bad)
 
+    def test_medium_v11_requires_local_occlusion_and_limits_added_targets(self):
+        self.plan["schema_version"] = "1.1"
+        self.path.write_text(json.dumps(self.plan))
+        with self.assertRaisesRegex(ValueError, "occlusion target"):
+            read_plan(self.path)
+        self.plan["variants"][1]["occlusion_targets"] = [
+            {"target_copy_id": "cup_0", "blocker_objects": ["Box"]}]
+        self.path.write_text(json.dumps(self.plan))
+        read_plan(self.path)
+        self.plan["variants"][1]["copies"].append({"id": "cup_2", "from": "cup",
+             "xy": [3, 1], "support_object": "Table"})
+        self.path.write_text(json.dumps(self.plan))
+        with self.assertRaisesRegex(ValueError, "at most two"):
+            read_plan(self.path)
+
     def test_deepseek_cache_usage(self):
         usage = normalize_usage({"input_tokens": 100, "prompt_cache_hit_tokens": 80,
                                  "prompt_cache_miss_tokens": 20, "output_tokens": 9}, "anthropic")

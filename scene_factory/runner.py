@@ -87,8 +87,14 @@ existing occluders. Explicitly list all relevant ORIGINAL instances in entities;
 include every matching original, even hidden ones. Keep source geometry and materials.
 The three questions must have different target kinds and answers. Use Chinese natural
 questions. Simple is a count, medium a conditional count using pose/region, hard a
-comparison between two kinds. Place enough copies to meet the visibility gate:
-at least 1 / 2 / 3 hidden from start for simple / medium / hard. Choose an explicit
+comparison between two kinds. Medium difficulty must come from VISUAL OCCLUSION,
+not from adding many targets: use at most two target copies, place at least one
+behind a nearby native scene prop, and declare occlusion_targets with its exact
+blocker mesh name(s). Use schema_version 1.1. The builder raycasts target surface
+samples and requires at least 35% blocked by that named prop at the start view;
+the blocker must be small relative to the scene and close to the target, so a
+perimeter wall alone is not sufficient. Place enough copies to meet the
+visibility gate: at least 1 / 1 / 3 hidden from start for simple / medium / hard. Choose an explicit
 start camera so the answer is not directly available. All copies must be discoverable
 from a global orbit or from a focused, zoomed local view. Hard need not claim
 30 actions without blind test.

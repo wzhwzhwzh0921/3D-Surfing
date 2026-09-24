@@ -9,8 +9,8 @@ LEVELS = ("simple", "medium", "hard")
 
 def read_plan(path: str | Path) -> dict:
     plan = json.loads(Path(path).read_text(encoding="utf-8"))
-    if plan.get("schema_version") != "1.0":
-        raise ValueError("schema_version must be 1.0")
+    if plan.get("schema_version") not in ("1.0", "1.1"):
+        raise ValueError("schema_version must be 1.0 or 1.1")
     variants = plan.get("variants")
     if not isinstance(variants, list) or len(variants) != 3:
         raise ValueError("Exactly three variants are required")
@@ -47,6 +47,20 @@ def read_plan(path: str | Path) -> dict:
                 raise ValueError(f"{level}: copy needs world-space xy")
             if not c.get("support_object"):
                 raise ValueError(f"{level}: copy needs named support surface")
+        if level == "medium" and plan["schema_version"] == "1.1":
+            if len(copies) > 2:
+                raise ValueError("medium: use at most two new targets; difficulty should come from occlusion")
+            occlusion_targets = v.get("occlusion_targets")
+            if not isinstance(occlusion_targets, list) or not occlusion_targets:
+                raise ValueError("medium: declare at least one occlusion target")
+            for target in occlusion_targets:
+                if target.get("target_copy_id") not in copy_ids:
+                    raise ValueError("medium: occlusion target must be a declared target copy")
+                blockers = target.get("blocker_objects")
+                if not isinstance(blockers, list) or not blockers or any(
+                    not isinstance(name, str) or not name for name in blockers
+                ):
+                    raise ValueError("medium: list the original mesh objects that act as blockers")
         q = v.get("question", {})
         if q.get("mode") not in ("count", "compare") or not q.get("text"):
             raise ValueError(f"{level}: count/compare question and text required")
