@@ -47,28 +47,49 @@ def read_plan(path: str | Path) -> dict:
                 raise ValueError(f"{level}: copy needs world-space xy")
             if not c.get("support_object"):
                 raise ValueError(f"{level}: copy needs named support surface")
-        if level == "medium" and plan["schema_version"] == "1.1":
-            if len(copies) > 2:
+        if level in ("medium", "hard") and plan["schema_version"] == "1.1":
+            if level == "medium" and len(copies) > 2:
                 raise ValueError("medium: use at most two new targets; difficulty should come from occlusion")
             occlusion_targets = v.get("occlusion_targets")
             if not isinstance(occlusion_targets, list) or not occlusion_targets:
-                raise ValueError("medium: declare at least one occlusion target")
+                raise ValueError(f"{level}: declare occlusion targets")
+            if level == "hard" and (len(occlusion_targets) < 2 or len({
+                t.get("target_copy_id") for t in occlusion_targets}) < 2):
+                raise ValueError("hard: at least two distinct hidden targets are required")
             for target in occlusion_targets:
                 if target.get("target_copy_id") not in copy_ids:
-                    raise ValueError("medium: occlusion target must be a declared target copy")
+                    raise ValueError(f"{level}: occlusion target must be a declared target copy")
                 blockers = target.get("blocker_objects")
                 if not isinstance(blockers, list) or not blockers or any(
                     not isinstance(name, str) or not name for name in blockers
                 ):
-                    raise ValueError("medium: list the original mesh objects that act as blockers")
+                    raise ValueError(f"{level}: list the original mesh objects that act as blockers")
+            if level == "hard" and len({name for t in occlusion_targets
+                                        for name in t["blocker_objects"]}) < 2:
+                raise ValueError("hard: use at least two distinct local occluders")
         q = v.get("question", {})
-        if q.get("mode") not in ("count", "compare") or not q.get("text"):
-            raise ValueError(f"{level}: count/compare question and text required")
+        if q.get("mode") not in ("count", "compare", "identify") or not q.get("text"):
+            raise ValueError(f"{level}: count/compare/identify question and text required")
         if q.get("kind") not in {e["kind"] for e in entities}:
             raise ValueError(f"{level}: target kind absent from entity registry")
         if q["mode"] == "compare" and q.get("other_kind") not in {e["kind"] for e in entities}:
             raise ValueError(f"{level}: comparison kind absent")
-        if level == "hard" and q["mode"] != "compare":
+        if q["mode"] == "identify":
+            answer_copy = next((c for c in copies if c["id"] == q.get("answer_copy_id")), None)
+            if answer_copy is None or entity_index[answer_copy["from"]]["kind"] != q["kind"]:
+                raise ValueError(f"{level}: identify answer must refer to a copied target of the stated kind")
+            if level == "hard" and plan["schema_version"] == "1.1":
+                hidden_ids = {t["target_copy_id"] for t in v["occlusion_targets"]}
+                hidden_kinds = {entity_index[c["from"]]["kind"] for c in copies if c["id"] in hidden_ids}
+                if len(hidden_kinds) < 2:
+                    raise ValueError("hard: identify requires a different hidden distractor kind")
+            if plan["schema_version"] == "1.1" and not any(
+                t["target_copy_id"] == answer_copy["id"] and
+                q.get("anchor_blocker_object") in t["blocker_objects"]
+                for t in v.get("occlusion_targets", [])
+            ):
+                raise ValueError(f"{level}: identify answer must be tied to its named occluding anchor")
+        if level == "hard" and plan["schema_version"] == "1.0" and q["mode"] != "compare":
             raise ValueError("hard: use a comparison requiring two groups")
         cam = v.get("start_camera", {})
         if not isinstance(cam.get("azimuth_deg"), (int, float)) or not isinstance(cam.get("elevation_deg"), (int, float)):
@@ -92,6 +113,10 @@ def answer_from_registry(variant: dict) -> dict:
                          "pose": c.get("pose", original.get("pose")),
                          "region": c.get("region", original.get("region"))})
     q = variant["question"]
+    if q["mode"] == "identify":
+        chosen = next(e for e in entities if e["id"] == q["answer_copy_id"])
+        return {"value": chosen["kind"], "derivation": "copied target tied to named occluding anchor",
+                "target_copy_id": chosen["id"], "anchor_blocker_object": q.get("anchor_blocker_object")}
     def count(kind):
         return sum(e.get("kind") == kind and all(
             e.get(k) == q[k] for k in ("pose", "region") if q.get(k) is not None

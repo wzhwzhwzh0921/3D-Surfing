@@ -67,6 +67,9 @@ class PipelineTests(unittest.TestCase):
 
     def test_medium_v11_requires_local_occlusion_and_limits_added_targets(self):
         self.plan["schema_version"] = "1.1"
+        self.plan["variants"][2]["occlusion_targets"] = [
+            {"target_copy_id": "box_0", "blocker_objects": ["Bottle"]},
+            {"target_copy_id": "box_1", "blocker_objects": ["Cup"]}]
         self.path.write_text(json.dumps(self.plan))
         with self.assertRaisesRegex(ValueError, "occlusion target"):
             read_plan(self.path)
@@ -78,6 +81,24 @@ class PipelineTests(unittest.TestCase):
              "xy": [3, 1], "support_object": "Table"})
         self.path.write_text(json.dumps(self.plan))
         with self.assertRaisesRegex(ValueError, "at most two"):
+            read_plan(self.path)
+
+    def test_identify_answer_is_tied_to_hidden_anchor(self):
+        self.plan["schema_version"] = "1.1"
+        self.plan["variants"][1]["occlusion_targets"] = [
+            {"target_copy_id": "cup_0", "blocker_objects": ["Box"]}]
+        hard = self.plan["variants"][2]
+        hard["copies"][0]["from"] = "cup"
+        hard["occlusion_targets"] = [
+            {"target_copy_id": "box_0", "blocker_objects": ["Bottle"]},
+            {"target_copy_id": "box_1", "blocker_objects": ["Cup"]}]
+        hard["question"] = {"mode": "identify", "kind": "box", "answer_copy_id": "box_1",
+                            "anchor_blocker_object": "Cup", "text": "杯子后面藏的是什么？"}
+        self.path.write_text(json.dumps(self.plan))
+        self.assertEqual(answer_from_registry(read_plan(self.path)["variants"][2])["value"], "box")
+        hard["question"]["anchor_blocker_object"] = "Bottle"
+        self.path.write_text(json.dumps(self.plan))
+        with self.assertRaisesRegex(ValueError, "named occluding anchor"):
             read_plan(self.path)
 
     def test_deepseek_cache_usage(self):

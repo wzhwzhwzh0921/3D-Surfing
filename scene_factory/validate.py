@@ -45,7 +45,7 @@ def validate(plan_path: Path, output: Path, *, strict: bool = True) -> dict:
         seen_in_probes |= {p["copy_id"] for p in build.get("local_view_probes", [])}
         coverage = declared <= seen_in_probes
         min_hidden = {"simple": 1, "medium": 1 if plan["schema_version"] == "1.1" else 2,
-                      "hard": 3}[level]
+                      "hard": 2 if plan["schema_version"] == "1.1" else 3}[level]
         nontrivial = len(unseen) >= min_hidden
         # Different probes are required to expose all hidden copies. This is an
         # observable proxy, not a claim about 30 navigation actions.
@@ -53,15 +53,23 @@ def validate(plan_path: Path, output: Path, *, strict: bool = True) -> dict:
         reachable += [p for p in build.get("local_view_probes", []) if p["copy_id"] in unseen]
         occlusion = build.get("occlusion_evidence", {})
         occlusion_gate = True
-        if level == "medium" and plan["schema_version"] == "1.1":
+        if level in ("medium", "hard") and plan["schema_version"] == "1.1":
             # A hidden target must be concealed by a named, nearby scene prop,
             # rather than merely disappearing behind the global perimeter wall.
-            occlusion_gate = any(cid in unseen and evidence["samples"] >= 10 and
+            passing_occlusion = {cid: evidence for cid, evidence in occlusion.items()
+                                 if cid in unseen and evidence["samples"] >= 10 and
                                  evidence["blocked_fraction"] >= 0.35 and
                                  evidence["mean_blocker_gap"] is not None and
                                  evidence["mean_blocker_gap"] <= evidence["max_allowed_gap"] and
-                                 evidence["blocker_width_ratio"] <= 0.45
-                                 for cid, evidence in occlusion.items())
+                                 evidence["blocker_width_ratio"] <= 0.45}
+            if level == "medium":
+                occlusion_gate = bool(passing_occlusion)
+            else:
+                blockers = {name for evidence in passing_occlusion.values()
+                            for name in evidence["expected_blocker_objects"]}
+                occlusion_gate = len(passing_occlusion) >= 2 and len(blockers) >= 2
+                if variant["question"]["mode"] == "identify":
+                    occlusion_gate &= variant["question"]["answer_copy_id"] in passing_occlusion
         gate = coverage and nontrivial and bool(reachable) and not build.get("copy_collisions") and occlusion_gate
         results.append({"level": level, "scene": str(path), "sha256": digest,
                         "question": variant["question"]["text"], "answer": answer,
