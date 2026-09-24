@@ -150,6 +150,7 @@ def build(source, out, plan_path):
             for name in entity["objects"]:
                 if name not in original_by_name:
                     raise ValueError(f"Original mesh missing: {name}")
+        auto_adjustments = []
         for copy in variant["copies"]:
             entity = originals[copy["from"]]
             sources = [original_by_name[name] for name in entity["objects"]]
@@ -159,9 +160,35 @@ def build(source, out, plan_path):
                 raise ValueError(f"Support mesh missing: {copy['support_object']}")
             low, high = bounds(sources)
             center = Vector(((low[0] + high[0]) / 2, (low[1] + high[1]) / 2, low[2]))
-            z = support_z(supp, xy[0], xy[1], max(high[2], bounds(meshes)[1][2]))
             angle = math.radians(copy.get("yaw_deg", 0))
-            transform = Matrix.Translation((xy[0], xy[1], z + 0.002)) @ Matrix.Rotation(angle, 4, "Z") @ Matrix.Translation(-center)
+            span = max(high[0] - low[0], high[1] - low[1], 0.1)
+            directions = [(0, 0)] + [(math.cos(a), math.sin(a)) for a in
+                                   (0, math.pi / 4, math.pi / 2, 3 * math.pi / 4,
+                                    math.pi, 5 * math.pi / 4, 3 * math.pi / 2, 7 * math.pi / 4)]
+            candidates = [(xy[0], xy[1])]
+            for radius in (0.75 * span, 1.5 * span):
+                candidates += [(xy[0] + dx * radius, xy[1] + dy * radius) for dx, dy in directions[1:]]
+            chosen = None
+            previous_bounds = {cid: bounds(objects) for cid, objects in spawned.items()}
+            for candidate_xy in candidates:
+                try:
+                    z = support_z(supp, candidate_xy[0], candidate_xy[1], max(high[2], bounds(meshes)[1][2]))
+                except ValueError:
+                    continue
+                transform = (Matrix.Translation((candidate_xy[0], candidate_xy[1], z + 0.002)) @
+                             Matrix.Rotation(angle, 4, "Z") @ Matrix.Translation(-center))
+                points = [transform @ v for src in sources for v in world_corners(src)]
+                candidate_bounds = ([min(p[i] for p in points) for i in range(3)],
+                                    [max(p[i] for p in points) for i in range(3)])
+                if all(overlap_ratio(candidate_bounds, b) <= 0.3 for b in previous_bounds.values()):
+                    chosen = (candidate_xy, transform)
+                    break
+            if chosen is None:
+                raise ValueError(f"No collision-free nearby placement for {copy['id']}")
+            actual_xy, transform = chosen
+            if actual_xy != tuple(xy) and actual_xy != xy:
+                auto_adjustments.append({"copy_id": copy["id"], "requested_xy": xy,
+                                         "actual_xy": list(actual_xy), "reason": "copy overlap > 0.3"})
             made = []
             for src in sources:
                 obj = src.copy()
@@ -194,6 +221,23 @@ def build(source, out, plan_path):
                 probe_cam = camera_for(augmented, az, el)
                 visible = [cid for cid, objects in spawned.items() if any(visible_from(probe_cam, o) for o in objects)]
                 probes.append({"azimuth_deg": az, "elevation_deg": el, "visible_copy_ids": visible})
+        globally_visible = {cid for probe in probes for cid in probe["visible_copy_ids"]}
+        local_probes = []
+        for cid, objects in spawned.items():
+            if cid in globally_visible:
+                continue
+            for el in (20, 45, 70):
+                for az in range(0, 360, 45):
+                    # Focus and zoom are available to the eventual QA agent.
+                    # Probe whether a close object-centred view can reveal it.
+                    probe_cam = camera_for(objects, az, el)
+                    if any(visible_from(probe_cam, o) for o in objects):
+                        local_probes.append({"copy_id": cid, "azimuth_deg": az,
+                                             "elevation_deg": el})
+                        break
+                else:
+                    continue
+                break
         # Export only imported source meshes and their native-geometry copies.
         bpy.ops.object.select_all(action="DESELECT")
         for obj in augmented:
@@ -205,7 +249,9 @@ def build(source, out, plan_path):
                        "original_mesh_count": len(original_names), "export_mesh_count": len(augmented),
                        "copy_mesh_names": {k: [o.name for o in v] for k, v in spawned.items()},
                        "copy_bounds": copy_bounds, "copy_collisions": collisions,
+                       "auto_adjustments": auto_adjustments,
                        "start_visible_copies": start_vis, "view_probes": probes,
+                       "local_view_probes": local_probes,
                        "start_camera": cam})
     (out / "build_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2))
 

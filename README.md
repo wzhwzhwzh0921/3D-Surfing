@@ -1,6 +1,6 @@
 # Scene QA Factory / 3D 场景探索问答生成
 
-给定一个可下载的 `.glb` URL，本仓库用**一次 Claude Code + DeepSeek V4.1 Flash 会话**规划同一原场景的三次独立增强，并交付三套 `(scene.glb, question, programmatic answer, starting camera)`。三档分别为简单、中等、困难，目标物件类别、题目和答案必须不同。模型选择场景内原有物件作模板，程序复制原生几何与材质、导出三份 GLB，并做起始视角遮挡、24 视角可发现性、重复答案、碰撞等检查。
+给定一个可下载的 `.glb` URL，本仓库用**一次 Claude Code + DeepSeek V4.1 Flash 会话**规划同一原场景的三次独立增强，并交付三套 `(scene.glb, question, programmatic answer, starting camera)`。三档分别为简单、中等、困难，目标物件类别、题目和答案必须不同。模型选择场景内原有物件作模板，程序复制原生几何与材质、导出三份 GLB，并做起始视角遮挡、24 个全局视角加必要的局部换焦视角可发现性、重复答案、碰撞等检查。
 
 当前输入索引 `catalog/qualified.jsonl` 含 **1,654 个**先前筛选的 GLB 地址（简单 1,240 / 复杂 414），只保存链接和许可等元数据，不把大型资产提交到仓库。每条记录的 `license` 保留原始许可，分发增强资产前需按原许可核查。
 
@@ -12,12 +12,12 @@
 cd /home/ubuntu/blender/scene-qa-factory
 python3 -m venv .venv
 .venv/bin/pip install -e .
-export DEEPSEEK_API_KEY='从密钥管理器注入'
+export TOKENHUB_API_KEY='从密钥管理器注入'
 export SCENEQA_BLENDER='/path/to/blender'
 .venv/bin/sceneqa doctor
 ```
 
-官方 DeepSeek Anthropic 兼容接口默认是 `https://api.deepseek.com/anthropic`，V4.1 Flash 的模型名是 `deepseek-flash`。若使用之前的腾讯 TokenHub，设置 `SCENEQA_UPSTREAM` 为该服务的 Anthropic 兼容根路径，并设置它实际支持的模型 ID；OpenAI 风格 `chat/completions` URL 不能直接作为 Claude Code 上游。网关会对 429/5xx 重试，单次响应输出上限设为 65,536 tokens，未设置轮次限制。网关的 cache 命中率依据上游 usage 字段计算；若上游未返回缓存字段，报告为未知，绝不伪造命中率。单场景最多一个 Claude Code 会话；即便它的结果不通过最终验收，也只记录失败供续跑或人工处理。
+默认使用先前测试的 TokenHub `https://tokenhub.tencentmaas.com/v1/chat/completions` 和 `deepseek/deepseek-flash`。仓库自带本地协议桥，把 Claude Code 的 Anthropic Messages 请求转成 TokenHub 的 OpenAI Chat Completions 请求，包含图片、工具调用、流式响应和缓存统计。也可使用官方 DeepSeek：`--provider deepseek`，并设置 `DEEPSEEK_API_KEY`；其 Anthropic 兼容根地址为 `https://api.deepseek.com/anthropic`，V4.1 Flash 模型名为 `deepseek-flash`。两个网关均对 429/5xx 重试，单次响应输出上限设为 65,536 tokens，未设置轮次限制。网关的 cache 命中率依据上游 usage 字段计算；若上游未返回缓存字段，报告为未知。真实上游 key 只保留在本地网关进程，不传给可执行 Bash 的 Claude Code 子进程。单场景最多一个 Claude Code 会话；即便它的结果不通过最终验收，也只记录失败供续跑或人工处理。
 
 ## 单条与批量运行
 
@@ -28,7 +28,11 @@ sceneqa batch --catalog catalog/qualified.jsonl --tier simple --offset 0 --limit
 sceneqa list --tier complex --limit 10
 ```
 
+若 key 存在私有文件中，使用 `--key-file /private/path/key.txt`；支持纯 key 文件或包含 `TOKENHUB_API_KEY=` / `TENCENT_ENDPOINT_API_KEY=` 的 `.env`。不要把私有文件放进本仓库。
+
 `run` 支持 `--input-path` 本地 GLB 和 `--dry-run`，后者只做源资产预检和四张彩色预览，不调用模型。`batch` 默认一个 worker，最多四个，并按 `uid` 续跑：已有通过验收的候选集会跳过；失败项保留 `status.json`、日志和中间产物。源下载有大小上限（默认 100 MB）、SHA256、GLB v2 头检查、断点式缓存与 429/5xx 重试。批量运行可用 `--max-bytes` 调整上限。
+
+若原场景不足三种**不同且可自然复制**的小物件，agent 应生成 `unsuitable.json` 记录原因，批量结果标为 `unsuitable`，而不是复制房屋、横梁或地面凑题。目录筛选的“可下载、场景复杂度合适”不等同于“适合三道探索题”；这一判断也是正式入库前的人工复核项。
 
 单场景的输出：
 
@@ -60,7 +64,9 @@ cd /data/sceneqa-runs/<uid> && python3 -m http.server 8000
 
 候选集必须通过结构化计划、三份有效且不同的 GLB、可计算且互异的答案、非直接揭晓的起始视角、24 视角可发现性以及复制件碰撞检查。复制对象只能来自原场景，并用支撑网格向下射线定位；导出保留原几何与材质。具体字段见 [计划协议](docs/PLAN_SCHEMA.md)。
 
-`candidate` **不是已认证的 benchmark gold**。程序无法仅凭 GLB 证明原场景同类物件已经清点完整、摆放符合语境，或一道题真的需要 30 次操作。发布正式题库前，应增加人工复核和盲测 agent 的探索轨迹，并把审核结果写到外部标注表。当前协议聚焦数量/条件数量/比较题，暂不自动生成「沙发背面毯子颜色」这类材质题；那需要独立的可验证颜色标注。
+`candidate` **不是已认证的 benchmark gold**。程序无法仅凭 GLB 证明原场景同类物件已经清点完整、摆放符合语境，或一道题真的需要 30 次操作。`validation.json` 会列出模型物件类别与原网格名不匹配的语义风险，以及构建器对轻微重叠所做的坐标调整。发布正式题库前，应增加人工复核和盲测 agent 的探索轨迹，并把审核结果写到外部标注表。当前协议聚焦数量/条件数量/比较题，暂不自动生成「沙发背面毯子颜色」这类材质题；那需要独立的可验证颜色标注。
+
+实际试跑和失败案例见 [验证记录](docs/SMOKE_TEST_2026-09-24.md)。
 
 ## 开发验证
 

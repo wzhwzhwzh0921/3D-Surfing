@@ -27,6 +27,14 @@ def validate(plan_path: Path, output: Path, *, strict: bool = True) -> dict:
         hashes.append(digest)
         answer = answer_from_registry(variant)
         answers.append(answer["value"])
+        semantic_warnings = []
+        for entity in variant["entities"]:
+            kind = str(entity["kind"]).lower().strip()
+            names = " ".join(entity["objects"]).lower()
+            if kind.isascii() and kind.replace("_", "").isalpha() and kind not in names:
+                semantic_warnings.append({"entity_id": entity["id"], "claimed_kind": kind,
+                                          "source_meshes": entity["objects"],
+                                          "warning": "kind label is not supported by mesh names; visual audit required"})
         declared = {c["id"] for c in variant["copies"]}
         exported = set(build["copy_mesh_names"])
         if declared != exported or build["export_mesh_count"] <= build["original_mesh_count"]:
@@ -34,6 +42,7 @@ def validate(plan_path: Path, output: Path, *, strict: bool = True) -> dict:
         start = build["start_visible_copies"]
         unseen = declared - {cid for cid, visible in start.items() if visible}
         seen_in_probes = {cid for p in build["view_probes"] for cid in p["visible_copy_ids"]}
+        seen_in_probes |= {p["copy_id"] for p in build.get("local_view_probes", [])}
         coverage = declared <= seen_in_probes
         min_hidden = {"simple": 1, "medium": 2, "hard": 3}[level]
         nontrivial = len(unseen) >= min_hidden
@@ -45,8 +54,11 @@ def validate(plan_path: Path, output: Path, *, strict: bool = True) -> dict:
                         "question": variant["question"]["text"], "answer": answer,
                         "start_camera": build["start_camera"], "hidden_copy_ids_at_start": sorted(unseen),
                         "visible_copy_ids_from_probes": sorted(seen_in_probes),
+                        "local_view_probes": build.get("local_view_probes", []),
                         "all_copies_discoverable": coverage, "min_hidden_required": min_hidden,
                         "copy_collisions": build.get("copy_collisions", []),
+                        "auto_adjustments": build.get("auto_adjustments", []),
+                        "semantic_warnings": semantic_warnings,
                         "visibility_gate": gate, "size_bytes": path.stat().st_size,
                         "license": plan.get("source", {}).get("license")})
     if len(set(hashes)) != 3:

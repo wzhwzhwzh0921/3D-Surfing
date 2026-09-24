@@ -1,0 +1,44 @@
+"""Conservative cheap screen before paying for a long scene-planning session.
+
+Only definitive, well-named low-diversity cases are rejected. Generic mesh names
+remain unknown and are passed to the agent for visual inspection.
+"""
+from __future__ import annotations
+
+import re
+
+STRUCTURAL = {
+    "house", "land", "water", "dock", "docks", "door", "step", "steps",
+    "beam", "porch", "roof", "path", "floor", "wall", "terrain", "ground",
+    "sky", "ceiling", "window", "pillar", "stairs", "stair", "foundation",
+    "bridge", "main big beam", "base", "platform", "building", "room",
+    "background", "groundplane",
+}
+GENERIC = {"object", "cube", "mesh", "plane", "cylinder", "sphere", "circle",
+           "torus", "collection", "node", "primitive", "pcube", "pplane",
+           "pcylinder", "pcone", "pasted"}
+
+
+def normalized_kind(name: str) -> str:
+    name = name.strip()
+    if name.lower().startswith(("prop_", "sm_")):
+        name = name.split("_", 1)[1]
+    elif name.lower().startswith("background_"):
+        return "background"
+    name = name.split("_", 1)[0]
+    name = re.sub(r"(?:\.\d+|\s+\d+|\d+)+$", "", name).strip().lower()
+    name = re.sub(r"[-]+", " ", name)
+    return re.sub(r"\s+", " ", name).strip()
+
+
+def screen(inventory: dict) -> dict:
+    names = [normalized_kind(m["name"]) for m in inventory.get("meshes", [])]
+    categories = sorted({n for n in names if n and n not in STRUCTURAL and
+                         n.split()[0] not in STRUCTURAL and n.split()[0] not in GENERIC})
+    generic = [n for n in names if n and n.split()[0] in GENERIC]
+    # A mesh may be generically named despite representing a useful prop. Avoid
+    # rejecting such assets without a visual look.
+    status = "likely_unsuitable" if len(categories) < 3 and not generic else "needs_agent_review"
+    return {"status": status, "named_prop_categories": categories,
+            "generic_mesh_count": len(generic), "mesh_count": len(names),
+            "rule": "fewer than three distinct nonstructural named kinds; generic names are exempt"}
