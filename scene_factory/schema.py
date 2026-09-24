@@ -29,11 +29,16 @@ def read_plan(path: str | Path) -> dict:
         if any(not x for x in ids) or len(ids) != len(set(ids)):
             raise ValueError(f"{level}: entity ids missing or duplicate")
         entity_index = {e["id"]: e for e in entities}
+        mesh_owners = {}
         for e in entities:
             if not e.get("kind") or not isinstance(e.get("objects"), list) or not e["objects"]:
                 raise ValueError(f"{level}: every original entity needs kind and mesh objects")
+            for name in e["objects"]:
+                if name in mesh_owners:
+                    raise ValueError(f"{level}: original mesh {name} assigned to multiple entities")
+                mesh_owners[name] = e["id"]
         copy_ids = [c.get("id") for c in copies]
-        if any(not x for x in copy_ids) or len(copy_ids) != len(set(copy_ids)):
+        if any(not x for x in copy_ids) or len(copy_ids) != len(set(copy_ids)) or set(copy_ids) & set(ids):
             raise ValueError(f"{level}: copy ids missing or duplicate")
         for c in copies:
             if c.get("from") not in entity_index:

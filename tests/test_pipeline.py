@@ -53,6 +53,12 @@ class PipelineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "copy source"):
             read_plan(self.path)
 
+    def test_reject_duplicate_original_mesh(self):
+        self.plan["variants"][0]["entities"][1]["objects"] = ["Bottle"]
+        self.path.write_text(json.dumps(self.plan))
+        with self.assertRaisesRegex(ValueError, "assigned to multiple"):
+            read_plan(self.path)
+
     def test_reject_invalid_glb(self):
         bad = Path(self.temp.name) / "bad.glb"
         bad.write_bytes(b"not a glb")
