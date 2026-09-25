@@ -1,13 +1,15 @@
 import json
+import hashlib
 from pathlib import Path
 import tempfile
 import unittest
 
-from scene_factory.schema import answer_from_model, answer_from_registry, read_plan
+from scene_factory.schema import (answer_from_model, answer_from_registry, read_candidate_pool,
+                                  read_plan, select_candidates, validate_selection)
 from scene_factory.download import glb_header
 from scene_factory.gateway import normalize_usage
 from scene_factory.question_types import QUESTION_TYPES, type_order
-from scene_factory.runner import observed_evidence_reads, visual_quality_status
+from scene_factory.runner import observed_evidence_reads, observed_probe_reads, visual_quality_status
 
 
 def variant(level, kind, count):
@@ -176,6 +178,47 @@ class PipelineTests(unittest.TestCase):
              "input": {"command": "cat output/hard/detail.png"}}
         ]}}) + "\n")
         self.assertEqual(observed_evidence_reads(stream, work), ["simple/reveal.png"])
+
+    def test_probe_previews_must_be_opened_before_selection(self):
+        work = Path(self.temp.name)
+        stream = work / "claude_stream.jsonl"
+        stream.write_text(json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Read",
+             "input": {"file_path": "probe/simple_a/start_1.png"}},
+            {"type": "tool_use", "name": "Bash",
+             "input": {"command": "cat probe/medium_a/start_1.png"}}
+        ]}}) + "\n")
+        self.assertEqual(observed_probe_reads(stream, work, {"simple_a", "medium_a"}),
+                         ["simple_a"])
+
+    def test_selected_candidate_must_have_probed_camera_and_unchanged_placement(self):
+        sample = Path(__file__).resolve().parents[1] / "examples/candidate_fixture_pool.json"
+        pool = read_candidate_pool(sample)
+        selected = [next(c for c in pool["candidates"] if c["candidate_id"] == f"{level}_a")
+                    for level in ("simple", "medium", "hard")]
+        plan = {"workflow_version": "candidate_probe_v1", "variants": json.loads(json.dumps(selected))}
+        report = [{"candidate_id": v["candidate_id"],
+                   "candidate_sha256": hashlib.sha256(json.dumps(
+                       v, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+                   "recommended": [
+            {"azimuth_deg": 90, "elevation_deg": 35, "eligible": True}]} for v in selected]
+        for variant in plan["variants"]:
+            variant["start_camera"] = {"azimuth_deg": 90, "elevation_deg": 35}
+        validate_selection(plan, pool, report)
+        assembled = select_candidates(pool, report, {level: (f"{level}_a", 1)
+                                                    for level in ("simple", "medium", "hard")})
+        self.path.write_text(json.dumps(assembled))
+        self.assertEqual(read_plan(self.path)["workflow_version"], "candidate_probe_v1")
+        plan["variants"][0]["copies"][0]["xy"][0] += 0.5
+        with self.assertRaisesRegex(ValueError, "changed after probe"):
+            validate_selection(plan, pool, report)
+        plan["variants"][0]["copies"][0]["xy"][0] -= 0.5
+        plan["variants"][0]["start_camera"]["azimuth_deg"] = 120
+        with self.assertRaisesRegex(ValueError, "did not pass"):
+            validate_selection(plan, pool, report)
+        pool["candidates"][0]["question"]["text"] = "A changed proposal"
+        with self.assertRaisesRegex(ValueError, "changed since probe"):
+            validate_selection(assembled, pool, report)
 
 
 if __name__ == "__main__":

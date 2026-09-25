@@ -36,13 +36,29 @@ def normalized_kind(name: str) -> str:
 
 
 def screen(inventory: dict) -> dict:
-    names = [normalized_kind(m["name"]) for m in inventory.get("meshes", [])]
+    meshes = inventory.get("meshes", [])
+    names = [normalized_kind(m["name"]) for m in meshes]
     categories = sorted({n for n in names if n and n not in STRUCTURAL and
                          n.split()[0] not in STRUCTURAL and n.split()[0] not in GENERIC})
     generic = [n for n in names if n and n.split()[0] in GENERIC]
     # A mesh may be generically named despite representing a useful prop. Avoid
     # rejecting such assets without a visual look.
-    status = "likely_unsuitable" if len(categories) < 2 and not generic else "needs_agent_review"
+    scene_bounds = inventory.get("bounds") or {}
+    small = []
+    if "min" in scene_bounds and "max" in scene_bounds:
+        span = max(b - a for a, b in zip(scene_bounds["min"], scene_bounds["max"]))
+        if span > 0:
+            for mesh in meshes:
+                mesh_bounds = mesh.get("bounds")
+                if mesh_bounds and max(b - a for a, b in zip(*mesh_bounds)) <= 0.45 * span:
+                    small.append(mesh["name"])
+    geometry_reject = bool(scene_bounds) and len(small) < 2
+    status = ("likely_unsuitable" if geometry_reject or len(categories) < 2 and not generic
+              else "needs_agent_review")
     return {"status": status, "named_prop_categories": categories,
             "generic_mesh_count": len(generic), "mesh_count": len(names),
-            "rule": "fewer than two distinct nonstructural named kinds; generic names are exempt"}
+            "small_mesh_count": len(small),
+            "small_mesh_examples": small[:20],
+            "rule": ("fewer than two individually small meshes" if geometry_reject else
+                     "fewer than two distinct nonstructural named kinds" if status == "likely_unsuitable"
+                     else "no definitive low-diversity rejection; agent must inspect actual props")}

@@ -2,12 +2,102 @@
 from __future__ import annotations
 
 import json
+import hashlib
+from copy import deepcopy
 from pathlib import Path
 
 from .question_types import QUESTION_TYPES
 
 LEVELS = ("simple", "medium", "hard")
 MODERN = ("1.2", "1.3")
+
+
+def read_candidate_pool(path: str | Path) -> dict:
+    """Validate the six inexpensive proposals before rendering any full GLB."""
+    pool = json.loads(Path(path).read_text(encoding="utf-8"))
+    candidates = pool.get("candidates")
+    if pool.get("schema_version") != "candidate_pool_1" or not isinstance(candidates, list) or len(candidates) != 6:
+        raise ValueError("Candidate pool needs schema_version candidate_pool_1 and six candidates")
+    ids = [c.get("candidate_id") for c in candidates]
+    if any(not isinstance(x, str) or not x.replace("_", "").replace("-", "").isalnum()
+           for x in ids) or len(set(ids)) != 6:
+        raise ValueError("Candidate IDs must be unique letters, digits, _ or -")
+    if any(sum(c.get("level") == level for c in candidates) != 2 for level in LEVELS):
+        raise ValueError("Candidate pool needs two proposals per difficulty level")
+    for level in LEVELS:
+        first, second = (deepcopy(c) for c in candidates if c["level"] == level)
+        for item in (first, second):
+            item.pop("candidate_id", None)
+            item.pop("start_camera", None)
+        if first == second:
+            raise ValueError(f"{level}: two distinct proposals required")
+    for c in candidates:
+        if not c.get("entities") or not c.get("copies") or not c.get("question", {}).get("text"):
+            raise ValueError(f"{c['candidate_id']}: entities, copies and question required")
+        landmarks = c.get("start_landmarks")
+        if not isinstance(landmarks, list) or not landmarks or any(
+            not isinstance(item, dict) or not item.get("label") or
+            not isinstance(item.get("objects"), list) or not item["objects"]
+            for item in landmarks
+        ):
+            raise ValueError(f"{c['candidate_id']}: declare visible start_landmarks")
+        if c["level"] in ("medium", "hard") and not c.get("occlusion_targets"):
+            raise ValueError(f"{c['candidate_id']}: local occlusion required")
+        if c["level"] == "hard" and not c.get("anchor_query"):
+            raise ValueError(f"{c['candidate_id']}: nearest-anchor query required")
+    return pool
+
+
+def validate_selection(plan: dict, pool: dict, probe_report: list[dict]) -> None:
+    """The final plan must use camera-tested proposals, not unprobed edits."""
+    if plan.get("workflow_version") != "candidate_probe_v1":
+        raise ValueError("Final plan must declare workflow_version candidate_probe_v1")
+    by_id = {c["candidate_id"]: c for c in pool["candidates"]}
+    reports = {r["candidate_id"]: r for r in probe_report}
+    for variant in plan["variants"]:
+        cid = variant.get("candidate_id")
+        if cid not in by_id or cid not in reports or by_id[cid]["level"] != variant["level"]:
+            raise ValueError(f"{variant['level']}: select one probed candidate of the same level")
+        digest = hashlib.sha256(json.dumps(by_id[cid], ensure_ascii=False, sort_keys=True,
+                                           separators=(",", ":")).encode()).hexdigest()
+        if reports[cid].get("candidate_sha256") != digest:
+            raise ValueError(f"{cid}: candidate changed since probe; run probe again")
+        original = deepcopy(by_id[cid])
+        selected = deepcopy(variant)
+        for value in (original, selected):
+            value.pop("candidate_id", None)
+            value.pop("start_camera", None)
+            value.get("question", {}).pop("declared_answer", None)
+        if selected != original:
+            raise ValueError(f"{cid}: proposal changed after probe; rerun probe before selecting")
+        cam = variant["start_camera"]
+        if not any(o["eligible"] and o["azimuth_deg"] == cam["azimuth_deg"] and
+                   o["elevation_deg"] == cam["elevation_deg"]
+                   for o in reports[cid]["recommended"]):
+            raise ValueError(f"{cid}: selected camera did not pass the landmark/occlusion probe")
+
+
+def select_candidates(pool: dict, probe_report: list[dict], choices: dict) -> dict:
+    """Copy selected proposals into a final plan without hand-transcribing fields."""
+    candidates = {c["candidate_id"]: c for c in pool["candidates"]}
+    reports = {r["candidate_id"]: r for r in probe_report}
+    variants = []
+    for level in LEVELS:
+        cid, view_index = choices[level]
+        if cid not in candidates or cid not in reports or candidates[cid]["level"] != level:
+            raise ValueError(f"{level}: choose a probed candidate of this level")
+        views = reports[cid]["recommended"]
+        if not 1 <= view_index <= len(views) or not views[view_index - 1]["eligible"]:
+            raise ValueError(f"{cid}: choose an eligible preview index")
+        variant = deepcopy(candidates[cid])
+        view = views[view_index - 1]
+        variant["start_camera"] = {"azimuth_deg": view["azimuth_deg"],
+                                   "elevation_deg": view["elevation_deg"]}
+        variants.append(variant)
+    plan = {"schema_version": "1.3", "workflow_version": "candidate_probe_v1",
+            "variants": variants}
+    validate_selection(plan, pool, probe_report)
+    return plan
 
 
 def read_plan(path: str | Path) -> dict:

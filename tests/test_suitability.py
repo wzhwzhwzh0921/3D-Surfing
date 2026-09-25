@@ -26,6 +26,16 @@ class SuitabilityTests(unittest.TestCase):
         self.assertEqual(result["status"], "needs_agent_review")
         self.assertEqual(result["named_prop_categories"], ["book", "cup"])
 
+    def test_merged_scene_without_small_meshes_is_filtered(self):
+        inventory = {"bounds": {"min": [0, 0, 0], "max": [20, 20, 10]}, "meshes": [
+            {"name": "HouseTEX", "bounds": [[0, 0, 0], [20, 20, 10]]},
+            {"name": "VegetationTEX", "bounds": [[0, 0, 0], [18, 18, 9]]},
+            {"name": "GroundTEX", "bounds": [[0, 0, 0], [20, 20, 0.1]]},
+        ]}
+        result = screen(inventory)
+        self.assertEqual(result["status"], "likely_unsuitable")
+        self.assertEqual(result["small_mesh_count"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

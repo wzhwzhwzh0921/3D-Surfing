@@ -14,7 +14,7 @@ from .download import glb_header
 from .runner import ROOT, blender, run_batch, run_one
 from .question_types import QUESTION_TYPES, type_order
 from .suitability import screen
-from .schema import read_plan
+from .schema import read_candidate_pool, read_plan, select_candidates
 from .validate import validate
 
 
@@ -24,6 +24,11 @@ def catalog_rows(path: Path) -> list[dict]:
 
 def render_report(work: Path, output: Path) -> None:
     validation = json.loads((work / "output/validation.json").read_text())
+    quality_path = work / "visual_quality.json"
+    visual_status = (json.loads(quality_path.read_text()).get("status")
+                     if quality_path.exists() else "needs_review")
+    captions = {"reveal": "全景揭示视角", "detail": "单目标局部视角",
+                "answer_view": "按题型生成的同框证据"}
     cards = []
     for r in validation["results"]:
         level = r["level"]
@@ -32,20 +37,19 @@ def render_report(work: Path, output: Path) -> None:
         img = os.path.relpath((work / "output" / level / "start.png").resolve(), output.parent.resolve())
         scene = os.path.relpath((work / "output" / level / "scene.glb").resolve(), output.parent.resolve())
         extra_images = "".join(
-            f'<figure><img src="{html.escape(os.path.relpath((work / "output" / level / f"{name}.png").resolve(), output.parent.resolve()))}" alt="{name}"><figcaption>{"全景揭示视角" if name == "reveal" else "目标局部视角"}</figcaption></figure>'
-            for name in ("reveal", "detail") if (work / "output" / level / f"{name}.png").is_file())
+            f'<figure><img src="{html.escape(os.path.relpath((work / "output" / level / f"{name}.png").resolve(), output.parent.resolve()))}" alt="{name}"><figcaption>{captions[name]}</figcaption></figure>'
+            for name in ("reveal", "detail", "answer_view") if (work / "output" / level / f"{name}.png").is_file())
         cards.append(f'<article><h2>{html.escape(level)}</h2><model-viewer src="{html.escape(scene)}" camera-controls auto-rotate shadow-intensity="1" alt="{level} 3D scene"></model-viewer><img src="{html.escape(img)}" alt="起始视角">'
                      f'{extra_images}'
                      f'<p><b>题目：</b>{html.escape(r["question"])}</p>'
                      f'<p><b>{answer_label}：</b>{html.escape(str(r["answer"]["value"]))}</p>'
                      f'<p>起始视角隐藏副本 {len(r["hidden_copy_ids_at_start"])} 个；'
-                     f'全局或局部换焦可发现：{"是" if r["all_copies_discoverable"] else "否"}；'
-                     f'局部证据 {len(r.get("local_view_probes", []))} 个</p>'
+                     f'全局或局部换焦可发现：{"是" if r["all_copies_discoverable"] else "否"}</p>'
                      f'<p><a href="{scene}">下载 GLB</a></p></article>')
     page = """<!doctype html><html lang="zh"><meta charset="utf-8"><title>Scene QA</title>
 <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
 <style>body{font:16px system-ui;max-width:1200px;margin:30px auto;background:#eef1f5;color:#16212c}main{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:16px}article{background:white;padding:18px;border-radius:12px;box-shadow:0 2px 12px #0001}img,model-viewer{display:block;width:100%;aspect-ratio:1;object-fit:contain;background:#ddd}img{aspect-ratio:16/9}</style>
-<h1>场景增强审查页</h1><p>状态：""" + html.escape(validation["status"]) + """。标记「模型观察答案」的题由模型看图作答，程序只检查场景与视角条件，不核对答案；自然性与实际操作数仍需人工/盲测复核。</p><main>""" + "\n".join(cards) + "</main></html>"
+<h1>场景增强审查页</h1><p>结构状态：""" + html.escape(validation["status"]) + """；模型视觉自评：""" + html.escape(str(visual_status)) + """。标记「模型观察答案」的题由模型看图作答，程序不核对答案；自然性与实际操作数仍需人工/盲测复核。</p><main>""" + "\n".join(cards) + "</main></html>"
     output.write_text(page)
 
 
@@ -69,6 +73,17 @@ def parser() -> argparse.ArgumentParser:
     build.add_argument("--source", type=Path, required=True)
     build.add_argument("--plan", type=Path, required=True)
     build.add_argument("--output", type=Path, required=True)
+    probe = sub.add_parser("probe", help="Score candidate camera views before full GLB export")
+    probe.add_argument("--source", type=Path, required=True)
+    probe.add_argument("--candidates", type=Path, required=True)
+    probe.add_argument("--output", type=Path, required=True)
+    select = sub.add_parser("select", help="Assemble a final plan from three probed candidates")
+    select.add_argument("--candidates", type=Path, required=True)
+    select.add_argument("--probe-report", type=Path, required=True)
+    for level in ("simple", "medium", "hard"):
+        select.add_argument(f"--{level}", required=True)
+        select.add_argument(f"--{level}-view", type=int, choices=(1, 2), default=1)
+    select.add_argument("--output", type=Path, required=True)
     verify = sub.add_parser("verify")
     verify.add_argument("--plan", type=Path, required=True)
     verify.add_argument("--output", type=Path, required=True)
@@ -143,6 +158,20 @@ def main() -> None:
             glb_header(a.source)
             blender("build", a.source.resolve(), a.output.resolve(), a.plan.resolve())
             print(a.output / "build_report.json")
+        elif a.command == "probe":
+            read_candidate_pool(a.candidates)
+            glb_header(a.source)
+            blender("probe", a.source.resolve(), a.output.resolve(), a.candidates.resolve())
+            print(a.output / "probe_report.json")
+        elif a.command == "select":
+            pool = read_candidate_pool(a.candidates)
+            report = json.loads(a.probe_report.read_text())
+            choices = {level: (getattr(a, level), getattr(a, f"{level}_view"))
+                       for level in ("simple", "medium", "hard")}
+            plan = select_candidates(pool, report, choices)
+            a.output.write_text(json.dumps(plan, ensure_ascii=False, indent=2))
+            read_plan(a.output)
+            print(a.output)
         elif a.command == "verify":
             print(json.dumps(validate(a.plan, a.output), ensure_ascii=False, indent=2))
         elif a.command == "run":

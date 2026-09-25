@@ -2,6 +2,8 @@
 
 给定一个可下载的 `.glb` URL，本仓库用**一次 Claude Code + DeepSeek Flash 会话**规划同一原场景的三次独立增强，并交付三套 `(scene.glb, question, model_answer, starting camera)`。题型与难度正交：定义 **10 类题 × 3 档难度**，单场景仍只出简单、中等、困难各一题。题型顺序由场景 ID 和种子可复现地随机产生，模型从可行题型里选三种。简单题起始证据不可见；中等题有近处明显遮挡；困难题先按线索找对地标，再绕开局部遮挡。具体 30 个组合见 [题型矩阵](docs/QUESTION_TYPES.md)。
 
+新流程在这一次会话内先提出**每档两道候选题**，用轻量的 `probe` 扫描起始机位：地标必须能看见且足够大、目标答案须隐藏、中难档的真实第一遮挡物须符合要求。模型查看六道候选的截图后，每档选一道正式构建。最终另有按题型共同取景的 `answer_view.png`，帮助数数量或判断方位。协议见[候选题与机位探测](docs/CANDIDATE_PROBE.md)。
+
 当前输入索引 `catalog/qualified.jsonl` 含 **1,654 个**先前筛选的 GLB 地址（简单 1,240 / 复杂 414），只保存链接和许可等元数据，不把大型资产提交到仓库。每条记录的 `license` 保留原始许可，分发增强资产前需按原许可核查。
 
 ## 安装与配置
@@ -30,6 +32,8 @@ sceneqa run --input-path /data/source.glb --output-root /data/sceneqa-runs
 sceneqa batch --catalog catalog/qualified.jsonl --tier simple --offset 0 --limit 20 --workers 2 --output-root /data/sceneqa-runs
 sceneqa list --tier complex --limit 10
 sceneqa types --scene-id a450b90cb444431d93c6e4bab70fa233 --seed 0
+sceneqa probe --source /data/source.glb --candidates /data/candidates.json --output /data/probe
+sceneqa select --candidates /data/candidates.json --probe-report /data/probe/probe_report.json --simple simple_a --medium medium_b --hard hard_a --output /data/plan.json
 ```
 
 `.env` 不会自动加载，必须先 `source`；若 key 存在私有文件中，可用 `--key-file /private/path/key.txt`，支持纯 key 文件或包含 `TOKENHUB_API_KEY=` / `TENCENT_ENDPOINT_API_KEY=` 的 `.env`。不要把私有文件放进本仓库。
@@ -45,6 +49,9 @@ runs/<uid>/
   source.glb                  原始资产
   inspect/inventory.json      网格名、包围盒和材质
   inspect/source_*.png        四个原始场景视角
+  candidates.json             六道候选题，每档两道
+  probe/probe_report.json     起始机位可见性与遮挡扫描
+  probe/<candidate_id>/start_*.png  候选起始图
   plan.json                   单次 agent 会话设计的三档计划
   agent_notes.md              模型对场景自然性的说明
   output/build_report.json    导出物件及起始/探测视角证据
@@ -53,6 +60,7 @@ runs/<uid>/
   output/{simple,medium,hard}/start.png
   output/{simple,medium,hard}/reveal.png  揭示视角
   output/{simple,medium,hard}/detail.png  目标局部视角
+  output/{simple,medium,hard}/answer_view.png  题目所需证据同框视角
   api_usage.jsonl             逐次 API 尝试和缓存统计
   status.json                 续跑状态
 ```
@@ -68,17 +76,19 @@ cd /data/sceneqa-runs/<uid> && python3 -m http.server 8000
 
 ## 质量边界
 
-新版 `1.3` 要求三题类型不同，并验证起始遮挡、局部遮挡及困难题的最近地标线索。构建器还会输出每档 `reveal.png` 和 `detail.png`；程序检查 Claude Code 的工具日志，确认模型实际打开了六张图，随后由模型自行给出或修正三道题的答案。**程序不计算、不核对任何题目的答案**；`validation.json` 中的 `answer.source` 为 `model_visual`，`answer_verified` 为 `false`。复制对象只能来自原场景，并用支撑网格向下射线定位；导出保留原几何与材质。具体字段见 [计划协议](docs/PLAN_SCHEMA.md)。
+新版 `1.3` 要求三题类型不同，并验证起始遮挡、局部遮挡及困难题的最近地标线索。`candidate_probe_v1` 还要求先查看六个候选预览、选用探测通过的机位，再检查每档 `start/reveal/detail/answer_view.png`；程序核对 Claude Code 的图片读取记录，随后由模型自行给出或修正三道题的答案。**程序不计算、不核对任何题目的答案**；`validation.json` 中的 `answer.source` 为 `model_visual`，`answer_verified` 为 `false`。复制对象只能来自原场景，并用支撑网格向下射线定位；导出保留原几何与材质。具体字段见 [计划协议](docs/PLAN_SCHEMA.md)。
 
 `candidate` 表示三份模型和预设的结构/视角条件通过检查，**不表示模型答案正确或已认证为 benchmark gold**。程序无法仅凭 GLB 证明原场景同类物件清点完整、摆放符合语境，或一道题真的需要 30 次操作。若未来要发布严格题库，再对答案抽样复核并运行盲测 agent；当前流水线按你的要求保留模型自行作答的结果。
 
-生成提示词还要求模型逐档查看 `start/reveal/detail.png` 并做语义自查：起始图及同款原物件是否泄露答案，揭示图是否清楚露出关键形状或颜色，题目指向的地标与方位是否唯一，以及复制件是否自然地落在场景里。发现捷径或歧义时，应修改题目、摆放或相机后重建，并在 `agent_notes.md` 记录每档的证据与残留疑点。这些是提示词要求，不是自动判真值；正式题库仍需人工审阅和盲测。
+生成提示词还要求模型逐档查看 `start/reveal/detail/answer_view.png` 并做语义自查：起始图及同款原物件是否泄露答案，揭示图是否清楚露出关键形状或颜色，题目指向的地标与方位是否唯一，以及复制件是否自然地落在场景里。发现捷径或歧义时，应修改候选题、摆放或相机后重新探测和构建，并在 `agent_notes.md` 记录每档的证据与残留疑点。这些是提示词要求，不是自动判真值；正式题库仍需人工审阅和盲测。
 
 模型还需写 `visual_quality.json`，逐档声明视觉自查是否通过并说明原因。若任一档失败，即使 `validation.json` 为结构性 `candidate`，批处理的 `status.json` 也标为 `visual_rejected`；缺少自查文件则标为 `needs_review`。这只是保留模型自己的看图结论，并不自动核验答案。
 
 若改用 Codex Sol 逐场景手工调用，使用[单场景任务模板](docs/CODEX_SOL_TASK.md)，每次替换源 GLB、工作目录和仓库路径；该模板包含相同的反捷径与视觉复核要求。
 
 实际试跑和失败案例见 [验证记录](docs/SMOKE_TEST_2026-09-24.md)。旧版 `1.2` 已完成真实 GLB 的 DeepSeek 单会话交付；新版 `1.3` 的三档构建/校验和 DeepSeek 独立看图作答分别测过，但**新版全流程单会话尚未成功跑通**，不应按生产稳定性看待。
+
+候选探测 → 三题选择 → Blender 构建 → 结构校验已用真实 GLB 跑通，详见[新版流程冒烟记录](docs/CANDIDATE_PROBE_SMOKE.md)。DeepSeek/Claude Code 单会话和视觉入库率尚待实跑，不能据此宣称拒收率已降低。
 
 Codex Sol xhigh 的三个逐场景复核及本次提示词调整见 [2026-09-25 迭代记录](docs/ITERATIONS_2026-09-25.md)。其可视化审查页在工作区 `../scene-qa-runs/iterations-2026-09-25/index.html`；本轮的两个构建案例都未通过三档视觉复核，不能当作正式题库样本。
 

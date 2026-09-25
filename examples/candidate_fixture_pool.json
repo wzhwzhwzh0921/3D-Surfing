@@ -1,0 +1,499 @@
+{
+  "schema_version": "candidate_pool_1",
+  "candidates": [
+    {
+      "level": "simple",
+      "entities": [
+        {
+          "id": "bottle",
+          "kind": "bottle",
+          "objects": [
+            "Bottle"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        },
+        {
+          "id": "cup",
+          "kind": "cup",
+          "objects": [
+            "Cup"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        },
+        {
+          "id": "box",
+          "kind": "box",
+          "objects": [
+            "Box"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        }
+      ],
+      "copies": [
+        {
+          "id": "bottle_0",
+          "from": "bottle",
+          "xy": [
+            -1.0,
+            2.0
+          ],
+          "support_object": "Floor",
+          "pose": "upright",
+          "region": "floor"
+        }
+      ],
+      "question": {
+        "question_type": "count",
+        "mode": "count",
+        "kind": "bottle",
+        "text": "场景中共有几只瓶子？",
+        "declared_answer": 2,
+        "evidence_ids": [
+          "bottle",
+          "bottle_0"
+        ]
+      },
+      "start_camera": {
+        "azimuth_deg": 270,
+        "elevation_deg": 5
+      },
+      "candidate_id": "simple_a",
+      "start_landmarks": [
+        {
+          "label": "场景盒",
+          "objects": [
+            "Box"
+          ]
+        }
+      ]
+    },
+    {
+      "level": "simple",
+      "entities": [
+        {
+          "id": "bottle",
+          "kind": "bottle",
+          "objects": [
+            "Bottle"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        },
+        {
+          "id": "cup",
+          "kind": "cup",
+          "objects": [
+            "Cup"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        },
+        {
+          "id": "box",
+          "kind": "box",
+          "objects": [
+            "Box"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        }
+      ],
+      "copies": [
+        {
+          "id": "bottle_0",
+          "from": "bottle",
+          "xy": [
+            -0.88,
+            2.0
+          ],
+          "support_object": "Floor",
+          "pose": "upright",
+          "region": "floor"
+        }
+      ],
+      "question": {
+        "question_type": "count",
+        "mode": "count",
+        "kind": "bottle",
+        "text": "场景中共有几只瓶子？（候选角度二）",
+        "declared_answer": 2,
+        "evidence_ids": [
+          "bottle",
+          "bottle_0"
+        ]
+      },
+      "start_camera": {
+        "azimuth_deg": 270,
+        "elevation_deg": 5
+      },
+      "candidate_id": "simple_b",
+      "start_landmarks": [
+        {
+          "label": "场景盒",
+          "objects": [
+            "Box"
+          ]
+        }
+      ]
+    },
+    {
+      "level": "medium",
+      "entities": [
+        {
+          "id": "bottle",
+          "kind": "bottle",
+          "objects": [
+            "Bottle"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        },
+        {
+          "id": "cup",
+          "kind": "cup",
+          "objects": [
+            "Cup"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        },
+        {
+          "id": "box",
+          "kind": "box",
+          "objects": [
+            "Box"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        }
+      ],
+      "copies": [
+        {
+          "id": "cup_0",
+          "from": "cup",
+          "xy": [
+            -1.0,
+            2.0
+          ],
+          "support_object": "Floor",
+          "pose": "upright",
+          "region": "floor"
+        }
+      ],
+      "question": {
+        "question_type": "color",
+        "mode": "evidence",
+        "kind": "cup",
+        "text": "盒子后那只杯子是什么颜色？",
+        "declared_answer": "蓝色",
+        "evidence_ids": [
+          "cup_0"
+        ],
+        "evidence_context_objects": [
+          "Box"
+        ]
+      },
+      "start_camera": {
+        "azimuth_deg": 270,
+        "elevation_deg": 5
+      },
+      "occlusion_targets": [
+        {
+          "target_copy_id": "cup_0",
+          "blocker_objects": [
+            "Box"
+          ]
+        }
+      ],
+      "candidate_id": "medium_a",
+      "start_landmarks": [
+        {
+          "label": "遮挡盒",
+          "objects": [
+            "Box"
+          ]
+        }
+      ]
+    },
+    {
+      "level": "medium",
+      "entities": [
+        {
+          "id": "bottle",
+          "kind": "bottle",
+          "objects": [
+            "Bottle"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        },
+        {
+          "id": "cup",
+          "kind": "cup",
+          "objects": [
+            "Cup"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        },
+        {
+          "id": "box",
+          "kind": "box",
+          "objects": [
+            "Box"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        }
+      ],
+      "copies": [
+        {
+          "id": "cup_0",
+          "from": "cup",
+          "xy": [
+            -0.88,
+            2.0
+          ],
+          "support_object": "Floor",
+          "pose": "upright",
+          "region": "floor"
+        }
+      ],
+      "question": {
+        "question_type": "color",
+        "mode": "evidence",
+        "kind": "cup",
+        "text": "盒子后那只杯子是什么颜色？（候选角度二）",
+        "declared_answer": "蓝色",
+        "evidence_ids": [
+          "cup_0"
+        ],
+        "evidence_context_objects": [
+          "Box"
+        ]
+      },
+      "start_camera": {
+        "azimuth_deg": 270,
+        "elevation_deg": 5
+      },
+      "occlusion_targets": [
+        {
+          "target_copy_id": "cup_0",
+          "blocker_objects": [
+            "Box"
+          ]
+        }
+      ],
+      "candidate_id": "medium_b",
+      "start_landmarks": [
+        {
+          "label": "遮挡盒",
+          "objects": [
+            "Box"
+          ]
+        }
+      ]
+    },
+    {
+      "level": "hard",
+      "entities": [
+        {
+          "id": "bottle",
+          "kind": "bottle",
+          "objects": [
+            "Bottle"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        },
+        {
+          "id": "cup",
+          "kind": "cup",
+          "objects": [
+            "Cup"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        },
+        {
+          "id": "box",
+          "kind": "box",
+          "objects": [
+            "Box"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        }
+      ],
+      "copies": [
+        {
+          "id": "box_0",
+          "from": "box",
+          "xy": [
+            -1.0,
+            2.0
+          ],
+          "support_object": "Floor",
+          "pose": "upright",
+          "region": "floor"
+        }
+      ],
+      "question": {
+        "question_type": "identity",
+        "mode": "identify",
+        "kind": "box",
+        "answer_copy_id": "box_0",
+        "anchor_blocker_object": "Cup",
+        "text": "离瓶子最近的地标后面是什么？",
+        "declared_answer": "盒子",
+        "evidence_ids": [
+          "box_0"
+        ],
+        "evidence_context_objects": [
+          "Bottle",
+          "Cup"
+        ]
+      },
+      "start_camera": {
+        "azimuth_deg": 270,
+        "elevation_deg": 5
+      },
+      "occlusion_targets": [
+        {
+          "target_copy_id": "box_0",
+          "blocker_objects": [
+            "Cup"
+          ]
+        }
+      ],
+      "anchor_query": {
+        "relation": "nearest",
+        "reference_object": "Bottle",
+        "candidate_objects": [
+          "Cup",
+          "Box"
+        ],
+        "answer_anchor_object": "Cup",
+        "target_copy_id": "box_0"
+      },
+      "candidate_id": "hard_a",
+      "start_landmarks": [
+        {
+          "label": "参照瓶",
+          "objects": [
+            "Bottle"
+          ]
+        },
+        {
+          "label": "候选杯和盒",
+          "objects": [
+            "Cup",
+            "Box"
+          ]
+        }
+      ]
+    },
+    {
+      "level": "hard",
+      "entities": [
+        {
+          "id": "bottle",
+          "kind": "bottle",
+          "objects": [
+            "Bottle"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        },
+        {
+          "id": "cup",
+          "kind": "cup",
+          "objects": [
+            "Cup"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        },
+        {
+          "id": "box",
+          "kind": "box",
+          "objects": [
+            "Box"
+          ],
+          "pose": "upright",
+          "region": "floor"
+        }
+      ],
+      "copies": [
+        {
+          "id": "box_0",
+          "from": "box",
+          "xy": [
+            -0.88,
+            2.0
+          ],
+          "support_object": "Floor",
+          "pose": "upright",
+          "region": "floor"
+        }
+      ],
+      "question": {
+        "question_type": "identity",
+        "mode": "identify",
+        "kind": "box",
+        "answer_copy_id": "box_0",
+        "anchor_blocker_object": "Cup",
+        "text": "离瓶子最近的地标后面是什么？（候选角度二）",
+        "declared_answer": "盒子",
+        "evidence_ids": [
+          "box_0"
+        ],
+        "evidence_context_objects": [
+          "Bottle",
+          "Cup"
+        ]
+      },
+      "start_camera": {
+        "azimuth_deg": 270,
+        "elevation_deg": 5
+      },
+      "occlusion_targets": [
+        {
+          "target_copy_id": "box_0",
+          "blocker_objects": [
+            "Cup"
+          ]
+        }
+      ],
+      "anchor_query": {
+        "relation": "nearest",
+        "reference_object": "Bottle",
+        "candidate_objects": [
+          "Cup",
+          "Box"
+        ],
+        "answer_anchor_object": "Cup",
+        "target_copy_id": "box_0"
+      },
+      "candidate_id": "hard_b",
+      "start_landmarks": [
+        {
+          "label": "参照瓶",
+          "objects": [
+            "Bottle"
+          ]
+        },
+        {
+          "label": "候选杯和盒",
+          "objects": [
+            "Cup",
+            "Box"
+          ]
+        }
+      ]
+    }
+  ]
+}

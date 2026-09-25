@@ -57,7 +57,12 @@ def validate(plan_path: Path, output: Path, *, strict: bool = True) -> dict:
         evidence_views = build.get("evidence_views", {})
         evidence_present = (plan["schema_version"] != "1.3" or
                             all((output / level / f"{name}.png").is_file()
-                                for name in ("reveal", "detail")))
+                                for name in (("reveal", "detail", "answer_view")
+                                             if plan.get("workflow_version") == "candidate_probe_v1"
+                                             else ("reveal", "detail"))))
+        answer_view_coverage = evidence_views.get("answer_view_coverage", {})
+        answer_view_gate = (plan.get("workflow_version") != "candidate_probe_v1" or
+                            answer_view_coverage.get("all_visible") is True)
         occlusion_gate = True
         if level in ("medium", "hard") and plan["schema_version"] in ("1.1", *MODERN):
             # A hidden target must be concealed by a named, nearby scene prop,
@@ -83,7 +88,8 @@ def validate(plan_path: Path, output: Path, *, strict: bool = True) -> dict:
                                   anchor.get("margin_ratio", 0) >= 0.15 and
                                   query["target_copy_id"] in passing_occlusion)
         gate = (coverage and nontrivial and bool(reachable) and
-                not build.get("copy_collisions") and occlusion_gate and evidence_present)
+                not build.get("copy_collisions") and occlusion_gate and evidence_present and
+                answer_view_gate)
         results.append({"level": level, "scene": str(path), "sha256": digest,
                         "question": variant["question"]["text"], "answer": answer,
                         "start_camera": build["start_camera"], "hidden_copy_ids_at_start": sorted(unseen),
@@ -97,6 +103,7 @@ def validate(plan_path: Path, output: Path, *, strict: bool = True) -> dict:
                         "anchor_query_evidence": build.get("anchor_query_evidence"),
                         "question_type": variant["question"].get("question_type"),
                         "evidence_views": evidence_views, "evidence_present": evidence_present,
+                        "answer_view_gate": answer_view_gate,
                         "answer_verified": answer.get("verified", True) and not (
                             plan["schema_version"] in MODERN and level == "hard" and
                             variant["question"]["mode"] in ("count", "compare")),

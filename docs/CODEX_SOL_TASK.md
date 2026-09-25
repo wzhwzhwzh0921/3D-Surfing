@@ -8,19 +8,21 @@
 独立工作目录：{WORK_DIR}
 仓库：{REPO_DIR}
 
-阅读 docs/PLAN_SCHEMA.md、docs/QUESTION_TYPES.md 和 examples/model_answer_fixture_plan.json（只参考结构）。不要读取同一原始场景已有的题目计划或答案，避免泄漏。不要修改仓库或提交 Git；只在独立工作目录写 plan.json、output/、review.html 和 agent_notes.md。
+阅读 docs/CANDIDATE_PROBE.md、docs/PLAN_SCHEMA.md、docs/QUESTION_TYPES.md、examples/candidate_fixture_pool.json 和 examples/model_answer_fixture_plan.json（样例只参考结构）。不要读取同一原始场景已有的题目计划或答案，避免泄漏。不要修改仓库或提交 Git；只在独立工作目录写 candidates.json、plan.json、probe/、output/、review.html 和 agent_notes.md。
 
 先看原场景四视角和 inventory。只复制场景中本来就有、适合自然复用的小物件，保留原几何、材质和比例。一份源 GLB 生成简单、中等、困难三个独立 GLB；三题题型不同，答案和目标也尽量不同。简单题起始视角隐藏关键证据；中等题有近处自然遮挡；困难题先用唯一线索定位地标，再绕行找隐藏答案。不要靠增加物件数量冒充难度。
 
-按 v1.3 计划 build、verify。每轮 build 后，逐张打开三档的 start.png、reveal.png、detail.png，共九张图。答案只能根据自己在图中看到的内容填写；计划里的复制来源、mesh 名、物件注册表和预期数量不能代替视觉观察。看不清时改位置、视角或题目并重建，不要猜。
+先在 candidates.json 为简单、中等、困难各提出两道不同的候选，共六道；每道列出题干中探索者**开始时**首先要认出的 start_landmarks（原场景 mesh 组）。困难题只要求第一步参照物在起始图可认，后续候选地标可以靠旋转、换焦发现；不要强求所有地标初始同框。调用 `python3 -m scene_factory.cli probe --source {SOURCE_GLB} --candidates {WORK_DIR}/candidates.json --output {WORK_DIR}/probe`，读 probe_report.json 和六道候选的 start_1.png，比较地标可认程度、目标是否隐藏、实际第一遮挡物。若某档两道都不合格，调整候选并重新 probe，不要直接全量建模。
+
+每档选一题，用 `python3 -m scene_factory.cli select --candidates {WORK_DIR}/candidates.json --probe-report {WORK_DIR}/probe/probe_report.json --simple SIMPLE_ID --medium MEDIUM_ID --hard HARD_ID --output {WORK_DIR}/plan.json` 自动生成计划；若选第二张推荐机位，加入对应的 `--simple-view 2` 等参数。计划自动设 `workflow_version: candidate_probe_v1` 并保留 candidate_id。若选择后改摆放或题干，要先重跑 probe。三档使用不同题型和不同答案。按 v1.3 计划 build、verify。每轮 build 后，逐张打开三档的 start.png、reveal.png、detail.png、answer_view.png，共十二张图。计数所需的全部物件写在 question.evidence_ids；区域边界、方向参照物等原始 mesh 写在 question.evidence_context_objects，供 answer_view.png 同框取景。答案只能根据自己在图中看到的内容填写；计划里的复制来源、mesh 名、物件注册表和预期数量不能代替视觉观察。看不清时换候选或重建，不要猜。
 
 对每一题做反捷径审查：
-0. 写计划前先核对 inventory 中是否真有至少两类可单独复制的小物件。预览里看到的道具若已并入房屋、植被等大 mesh，不算可复制物件；不要把整个合并网格当小物件复制。
+0. 写候选前先核对 inventory 中是否真有至少两类可单独复制的小物件，并能找到三组不同的「目标＋自然支撑/遮挡物＋起始地标」题目机会。预览里看到的道具若已并入房屋、植被等大 mesh，不算可复制物件；不要把整个合并网格当小物件复制。
 1. 起始图是否已露出答案？原场景里另一件同款物体是否泄露颜色、材质、图案或身份？题干能否靠常识或排除法猜中？若能，改题或改摆放；单纯把复制件藏住不够。
 2. 揭示图是否真的让人认得答案？身份题需露出区分物件的形状，不能只露出普通圆身；颜色/纹理题要看清相关表面；计数题要能检查指定范围内所有同类物体，包括边缘和背面。
 3. 指代是否唯一？「最近」「后面」「朝向」应指定明确地标和观察基准；从可到达视角应只有一个合理答案。若难题需要多跳，第二步必须真的依赖第一步选中的地标。
 4. 新物件是否有自然支撑、符合场景语境？遮挡比例通过只是结构检查，不等于题目无歧义或答案正确。
-5. 计数或比较涉及多个物件时，另外生成一张能同时看到全部相关物件和指定区域边界的近景；只聚焦第一个复制件的 `detail.png` 不足以证明总数。方向/位置题的证据图须同时给出目标、参照物和判断方向的地标，不能只凭世界坐标下结论。
+5. 计数或比较涉及多个物件时，检查自动生成的 `answer_view.png` 是否同时看到全部相关物件和指定区域边界；只聚焦第一个复制件的 `detail.png` 不足以证明总数。方向/位置题的证据图须同时给出目标、参照物和判断方向的地标，不能只凭世界坐标下结论。若 `answer_view_coverage.all_visible` 为 false，改候选或摆放后重新 probe、build。
 6. 起始图必须让题干中的地标足够清楚，不能让屋顶、外壳或背景占据大部分画面而把全部地标缩成几个像素。**逐档指出题干主要地标在 start.png 的哪一处、是否大到足以认出**；说不出来就换机位或换题，单纯藏住答案目标不够。身份题若只露出普通布角、圆身或其他不具辨识度的局部，应调整视角或换物件；同款原物件和 mesh 名都不能补足缺失的视觉证据。避免透明杯放在玻璃桌面等低对比度组合：渲染像素数不清，就不能用已知 mesh 数量补答案。
 
 初始相机的方位和仰角可以反复调整。比较候选起始图，选择能认出场景和题目地标、但仍看不到关键答案线索的角度；不要靠把整个场景拍得模糊或把地标也藏掉来增加难度。中/难题要检查射线首先撞到的真实网格：若实际是楼板、屋顶或外围墙挡住目标，就不能把旁边的椅子、柜子写成遮挡物，应改相机或物件位置。目标有部分表面被挡住可以接受，只要实际作答所需的特征在可到达视角清楚可见。难度按该场景内部相对区分，满足三档要求即可，不强求固定操作轮数或跨场景相同的绝对难度。

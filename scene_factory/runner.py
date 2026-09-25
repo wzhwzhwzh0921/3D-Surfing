@@ -15,7 +15,7 @@ from .download import copy_local, download
 from .gateway import gateway, summarize_usage
 from .openai_bridge import bridge
 from .question_types import QUESTION_TYPES, type_order
-from .schema import read_plan
+from .schema import read_candidate_pool, read_plan, validate_selection
 from .suitability import screen
 from .validate import validate
 
@@ -23,11 +23,12 @@ ROOT = Path(__file__).resolve().parent.parent
 WORKER = Path(__file__).with_name("blender_worker.py")
 AGENT_SYSTEM = (
     "You are a production scene-QA planner. Use the supplied inventory, four previews, "
-    "plan schema, and complete example as your interface. Decide suitability first. "
+    "plan schema, and candidate-probe protocol as your interface. Decide suitability first. "
     "If fewer than two distinct native small-prop categories can be augmented "
-    "naturally, write unsuitable.json and stop. Otherwise write plan.json promptly, "
-    "then invoke build, inspect all nine start/reveal/detail images, write your own answers, "
-    "and verify; revise the plan if needed. Write visual_quality.json after "
+    "naturally, write unsuitable.json and stop. Otherwise propose six candidates "
+    "(two per tier), probe camera visibility, select three, then build and inspect "
+    "start/reveal/detail/answer_view for every tier. Write your own answers, "
+    "and verify; revise and re-probe candidates if needed. Write visual_quality.json after "
     "the final visual self-review. Do not proactively call --help, "
     "inspect framework source, scan the filesystem, extract raw GLB textures, "
     "install packages, or write custom "
@@ -81,13 +82,38 @@ def prompt_for(scene_id: str, work: Path) -> str:
 Scene ID: {scene_id}. Work directory: {work}.
 The source is {work / 'source.glb'}. Inventory: {work / 'inspect/inventory.json'}.
 Four color previews are in {work / 'inspect'}; use Read on the PNGs.
-Create {work / 'plan.json'} following {ROOT / 'docs/PLAN_SCHEMA.md'} and
+First create {work / 'candidates.json'} following {ROOT / 'docs/CANDIDATE_PROBE.md'}.
+Use {ROOT / 'examples/candidate_fixture_pool.json'} only as a STRUCTURAL
+example of six complete entries; adapt all meshes, placements and questions.
+It must contain exactly six full candidate variants: TWO distinct proposals per
+level, simple/medium/hard. Each candidate declares start_landmarks: named
+original mesh group(s) that a solver must recognize in the starting image.
+For hard questions, list the initial reference landmark only; candidate
+anchors that the solver is supposed to discover later need not be visible
+at the start. Do not name a distant unrelated table as the starting landmark.
+Write candidates promptly after source inspection, then call:
+{sys.executable} -m scene_factory.cli probe --source {work / 'source.glb'} --candidates {work / 'candidates.json'} --output {work / 'probe'}
+Read {work / 'probe/probe_report.json'} and each candidate's start_1.png and
+start_2.png. The probe reports landmark pixel extent, visible/hidden copied
+targets, the first actual occluding mesh, and whether local blocker conditions
+pass. Prefer an eligible angle where all named landmarks are recognizable and
+the decisive target is hidden. If neither proposal for a level is eligible,
+revise candidates and run probe again before committing to a final plan.
+Then select exactly one candidate per level and create {work / 'plan.json'} following {ROOT / 'docs/PLAN_SCHEMA.md'} and
 {ROOT / 'docs/QUESTION_TYPES.md'}. Use schema_version 1.3.
+Use the select command to copy your chosen proposals without transcription:
+{sys.executable} -m scene_factory.cli select --candidates {work / 'candidates.json'} --probe-report {work / 'probe/probe_report.json'} --simple SIMPLE_ID --medium MEDIUM_ID --hard HARD_ID --output {work / 'plan.json'}
+If you prefer a candidate's second preview, add --simple-view 2,
+--medium-view 2 or --hard-view 2 for that level. Inspect both images first.
+Set workflow_version=candidate_probe_v1. Preserve the selected candidate_id
+and all probed fields; only add its selected eligible start_camera and later
+correct declared_answer after visual review. Do not change placement, question
+or landmarks without probing again. The three chosen question types and answers
+must differ. This still uses ONE Claude Code session for the whole source.
 Use {ROOT / 'examples/model_answer_fixture_plan.json'} only as a STRUCTURAL example; adapt every
 object name, location and question to this source. Read inventory and four previews.
 Do not call --help or inspect package source files, runner logs, task.txt, or status.json; the
-schema and supplied commands are the complete interface. Start writing the plan
-as soon as you have identified suitable original objects and support surfaces.
+schema and supplied commands are the complete interface.
 Use the supplied rendered images for appearance; do not unpack GLB images or
 create texture-extraction scripts.
 There must be exactly three independently augmented variants from the SAME original source:
@@ -100,10 +126,15 @@ Before planning, check that the inventory contains at least two distinct small
 meshes that can be copied individually. Props visible in a preview but merged
 into a whole-house, vegetation or ground mesh do not count. Such an asset is
 unsuitable even if the picture looks richly furnished.
+Also identify three plausible question niches: a native target, a natural
+support/occluder, and a recognizable start landmark for EACH tier. Different
+niches may share a prop category but should not repeat the same answer with
+only a changed number. If the scene cannot support three such niches, mark it
+unsuitable before spending time on six detailed candidates.
 QUESTION TYPES AND RANDOMIZATION: This scene's reproducible seed is {seed}.
 The randomized type order is: {menu}.
-Prefer the first THREE feasible types in that order, assign one to each difficulty
-independently, and use a different question_type for each. If a type is infeasible,
+Try feasible types in that order across the six proposals; after probing,
+select a different question_type for each final tier. If a type is infeasible,
 skip it and explain why in agent_notes.md. Do not force scene-inappropriate props.
 The same type may be simple, medium or hard in OTHER scenes; types are not tied to tiers.
 For count use mode count/compare; for identity use mode identify. The other eight
@@ -116,10 +147,16 @@ the generated answer views, correct it if the images show something different.
 For a count question, every relevant original and copy must be visually countable
 from the supplied/rendered views. If scattered or hidden originals make the total
 ambiguous, choose a smaller named region or skip count rather than guessing.
+List every object needed to answer in question.evidence_ids; for region boundaries,
+direction landmarks or a nearest-anchor comparison, list original mesh names in
+question.evidence_context_objects. The builder frames these together in
+answer_view.png and reports how many evidence groups are actually visible.
+If answer_view_coverage.all_visible is false, move objects, change the question
+or choose another candidate; do not infer an answer from world coordinates.
 Use natural Chinese questions and keep three answers distinct.
 
 QUESTION QUALITY AUDIT (apply separately to all three variants, not just verify):
-1. Read each tier's start.png, reveal.png and detail.png after building. At the
+1. Read each tier's start.png, reveal.png, detail.png and answer_view.png after building. At the
    start, can a solver answer from a visible target, a duplicate native prop,
    the wording, or a general scene convention without moving the camera? If yes,
    change the question, placement or start camera and rebuild. A hidden copy alone
@@ -197,14 +234,15 @@ rejected instead; do not write unsuitable.json for that outcome.
 Your tools: Bash, Read, Write, Edit, Glob, Grep. You can call:
 {sys.executable} -m scene_factory.cli build --source {work / 'source.glb'} --plan {work / 'plan.json'} --output {work / 'output'}
 {sys.executable} -m scene_factory.cli verify --plan {work / 'plan.json'} --output {work / 'output'}
-After EACH build, Read output/simple/start.png, reveal.png and detail.png, and
-likewise for medium and hard. Reconsider each declared_answer from those images
+After EACH build, Read output/simple/start.png, reveal.png, detail.png and
+answer_view.png, and likewise for medium and hard. Reconsider each declared_answer from those images
 and visually audit shortcuts, uniqueness and naturalness. Use source previews,
 inventory and nearest-anchor geometry to plan placement, not to substitute for
 visual proof of the answer. Update plan.json
 if an answer or question wording changes, then run verify. If the model cannot
 see the detail well enough, change the plan/placement and rebuild; do not guess.
-Iterate the plan/build/verify inside this same session until verify succeeds.
+Iterate candidates/probe/plan/build/verify inside this same session until
+verify succeeds or you honestly reject the scene.
 No second Claude session will be launched. Finally write {work / 'agent_notes.md'}
 with a brief per-tier audit: why the start cannot answer, which revealed view
 shows the answer, whether a duplicate or wording shortcut remains, and any
@@ -221,7 +259,7 @@ scene as ready for the question bank.
 
 
 def observed_evidence_reads(stream_path: Path, work: Path) -> list[str]:
-    """List reveal/detail images explicitly opened by the Claude agent."""
+    """List answer evidence images explicitly opened by the Claude agent."""
     observed = set()
     if not stream_path.exists():
         return []
@@ -242,10 +280,37 @@ def observed_evidence_reads(stream_path: Path, work: Path) -> list[str]:
             if not path.is_absolute():
                 path = work / path
             for level in ("simple", "medium", "hard"):
-                for kind in ("reveal", "detail"):
+                for kind in ("start", "reveal", "detail", "answer_view"):
                     expected = work / "output" / level / f"{kind}.png"
                     if path.resolve() == expected.resolve():
                         observed.add(f"{level}/{kind}.png")
+    return sorted(observed)
+
+
+def observed_probe_reads(stream_path: Path, work: Path, candidate_ids: set[str]) -> list[str]:
+    """Candidate previews must be seen before one proposal per tier is selected."""
+    observed = set()
+    if not stream_path.exists():
+        return []
+    for line in stream_path.read_text(errors="replace").splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if event.get("type") != "assistant":
+            continue
+        for block in event.get("message", {}).get("content", []):
+            if block.get("type") != "tool_use" or block.get("name") != "Read":
+                continue
+            raw = (block.get("input") or {}).get("file_path")
+            if not raw:
+                continue
+            path = Path(raw)
+            if not path.is_absolute():
+                path = work / path
+            for cid in candidate_ids:
+                if path.resolve() == (work / "probe" / cid / "start_1.png").resolve():
+                    observed.add(cid)
     return sorted(observed)
 
 
@@ -383,11 +448,19 @@ def run_one(row: dict, output_root: Path, *, source_path: Path | None = None,
             return state
         plan_path = work / "plan.json"
         plan = read_plan(plan_path)
+        pool = read_candidate_pool(work / "candidates.json")
+        probe_report = json.loads((work / "probe/probe_report.json").read_text())
+        probe_reads = observed_probe_reads(work / "claude_stream.jsonl", work,
+                                           {c["candidate_id"] for c in pool["candidates"]})
+        state["candidate_preview_reads"] = probe_reads
+        if missing := {c["candidate_id"] for c in pool["candidates"]} - set(probe_reads):
+            raise ValueError(f"Agent did not inspect candidate previews: {sorted(missing)}")
+        validate_selection(plan, pool, probe_report)
         if plan["schema_version"] == "1.3":
             reads = observed_evidence_reads(work / "claude_stream.jsonl", work)
             state["visual_evidence_reads"] = reads
             required = {f"{level}/{kind}.png" for level in ("simple", "medium", "hard")
-                        for kind in ("reveal", "detail")}
+                        for kind in ("start", "reveal", "detail", "answer_view")}
             if missing := required - set(reads):
                 raise ValueError(f"Agent did not inspect required answer views: {sorted(missing)}")
         plan["scene_id"] = scene_id

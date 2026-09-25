@@ -3,6 +3,7 @@
 Invocation: blender -b -t 2 --python blender_worker.py -- MODE SOURCE OUT [PLAN]
 """
 import json
+import hashlib
 import math
 import sys
 from pathlib import Path
@@ -81,6 +82,142 @@ def visible_from(camera, obj):
         if hit and hit_obj == obj:
             return True
     return False
+
+
+def landmark_snapshot(camera, objects, resolution=640):
+    """Cheap camera-space landmark evidence, never an answer judgment."""
+    from bpy_extras.object_utils import world_to_camera_view
+    scene = bpy.context.scene
+    coords = [world_to_camera_view(scene, camera, p)
+              for obj in objects for p in world_corners(obj)]
+    xs = [p.x for p in coords if p.z > 0]
+    ys = [p.y for p in coords if p.z > 0]
+    if not xs or not ys:
+        return {"visible": False, "extent_px": 0, "bbox_px": [0, 0, 0, 0]}
+    x0, x1 = max(0, min(xs)), min(1, max(xs))
+    y0, y1 = max(0, min(ys)), min(1, max(ys))
+    extent = max(0, x1 - x0, y1 - y0) * resolution
+    return {"visible": any(visible_from(camera, obj) for obj in objects),
+            "extent_px": round(extent, 1),
+            "bbox_px": [round(v * resolution, 1) for v in (x0, y0, x1, y1)]}
+
+
+def visible_sample_fraction(camera, objects):
+    """Prefer evidence views where each object exposes more than one tiny edge."""
+    from bpy_extras.object_utils import world_to_camera_view
+    scene = bpy.context.scene
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    samples = hits = 0
+    for obj in objects:
+        verts = obj.data.vertices
+        if not verts:
+            continue
+        step = max(1, len(verts) // 24)
+        for index in list(range(0, len(verts), step))[:24]:
+            vertex = verts[index]
+            target = obj.matrix_world @ vertex.co
+            ndc = world_to_camera_view(scene, camera, target)
+            if not (0 <= ndc.x <= 1 and 0 <= ndc.y <= 1 and ndc.z > 0):
+                continue
+            direction = target - camera.location
+            samples += 1
+            hit, _, _, _, hit_obj, _ = scene.ray_cast(
+                depsgraph, camera.location, direction.normalized(),
+                distance=direction.length + 0.001)
+            hits += bool(hit and hit_obj == obj)
+    return hits / samples if samples else 0
+
+
+def candidate_camera_options(variant, augmented, spawned, original_by_name, anchor_evidence=None):
+    landmarks = variant.get("start_landmarks") or []
+    if not landmarks:
+        raise ValueError("Candidate must declare start_landmarks with original mesh objects")
+    landmark_groups = []
+    for landmark in landmarks:
+        names = landmark.get("objects") or []
+        if not landmark.get("label") or not names or any(n not in original_by_name for n in names):
+            raise ValueError(f"Invalid start landmark: {landmark}")
+        landmark_groups.append((landmark["label"], [original_by_name[n] for n in names]))
+    angles = [(az, el) for el in (15, 25, 35, 45, 60) for az in range(0, 360, 30)]
+    guess = variant.get("start_camera") or {}
+    if "azimuth_deg" in guess and "elevation_deg" in guess:
+        pair = (guess["azimuth_deg"], guess["elevation_deg"])
+        if pair not in angles:
+            angles.insert(0, pair)
+    options = []
+    for az, el in angles:
+        camera = camera_for(augmented, az, el)
+        landmark_evidence = {label: landmark_snapshot(camera, objects, 512)
+                             for label, objects in landmark_groups}
+        visible_copies = [cid for cid, objects in spawned.items()
+                          if any(visible_from(camera, obj) for obj in objects)]
+        hidden = sorted(set(spawned) - set(visible_copies))
+        occlusion = {}
+        for item in variant.get("occlusion_targets", []):
+            cid = item["target_copy_id"]
+            names = item["blocker_objects"]
+            if cid not in spawned or any(n not in original_by_name for n in names):
+                raise ValueError(f"Invalid occlusion target in candidate: {item}")
+            occlusion[cid] = occlusion_evidence(camera, spawned[cid], names,
+                                                [original_by_name[n] for n in names], augmented)
+        landmark_ok = all(x["visible"] and x["extent_px"] >= 26
+                          for x in landmark_evidence.values())
+        passing_blockers = {cid for cid, e in occlusion.items() if
+                            cid in hidden and e["samples"] >= 10 and
+                            e["blocked_fraction"] >= 0.35 and
+                            e["mean_blocker_gap"] is not None and
+                            e["mean_blocker_gap"] <= e["max_allowed_gap"] and
+                            e["blocker_width_ratio"] <= 0.45}
+        local_blocker_ok = (bool(passing_blockers) if variant["level"] == "medium" else
+                            variant.get("anchor_query", {}).get("target_copy_id") in passing_blockers)
+        anchor_ok = (variant["level"] != "hard" or
+                     (anchor_evidence and
+                      anchor_evidence["resolved_anchor_object"] ==
+                      variant["anchor_query"]["answer_anchor_object"] and
+                      anchor_evidence["margin_ratio"] >= 0.15))
+        eligible = landmark_ok and bool(hidden) and (variant["level"] == "simple" or local_blocker_ok) and anchor_ok
+        score = (1000 if eligible else 0) + (200 if landmark_ok else 0) + (100 if hidden else 0)
+        score += min((x["extent_px"] for x in landmark_evidence.values()), default=0)
+        score += 100 * max((e["blocked_fraction"] for e in occlusion.values()), default=0)
+        options.append({"azimuth_deg": az, "elevation_deg": el,
+                        "landmarks": landmark_evidence, "hidden_copy_ids": hidden,
+                        "occlusion_evidence": occlusion, "eligible": eligible,
+                        "score": round(score, 2)})
+    return sorted(options, key=lambda x: x["score"], reverse=True)
+
+
+def answer_framing(variant, spawned, original_by_name):
+    """Frame all declared visual evidence together where a reachable view exists."""
+    entities = {e["id"]: e for e in variant["entities"]}
+    groups = []
+    for eid in variant["question"].get("evidence_ids", []):
+        if eid in spawned:
+            groups.append(spawned[eid])
+        elif eid in entities:
+            groups.append([original_by_name[n] for n in entities[eid]["objects"]])
+    for name in variant["question"].get("evidence_context_objects", []):
+        if name not in original_by_name:
+            raise ValueError(f"Unknown evidence context mesh: {name}")
+        groups.append([original_by_name[name]])
+    if not groups:
+        groups = [next(iter(spawned.values()))]
+    framing = list({obj.name: obj for group in groups for obj in group}.values())
+    best = None
+    for el in (20, 35, 45, 60, 75):
+        for az in range(0, 360, 30):
+            camera = camera_for(framing, az, el)
+            fractions = [visible_sample_fraction(camera, group) for group in groups]
+            visible = [fraction > 0 or any(visible_from(camera, obj) for obj in group)
+                       for fraction, group in zip(fractions, groups)]
+            extent = landmark_snapshot(camera, framing, 768)["extent_px"]
+            score = (sum(visible) * 10000 + min(fractions) * 3000 +
+                     sum(fractions) * 300 + min(extent, 768))
+            if best is None or score > best[0]:
+                best = (score, az, el, visible, fractions)
+    return framing, best[1], best[2], {"visible_groups": sum(best[3]),
+                                      "required_groups": len(groups),
+                                      "all_visible": all(best[3]),
+                                      "visible_fractions": [round(v, 3) for v in best[4]]}
 
 
 def occlusion_evidence(camera, objects, blocker_names, blockers, scene_objects):
@@ -191,12 +328,12 @@ def support_z(obj, x, y, top):
     return hit.z
 
 
-def build(source, out, plan_path):
+def build(source, out, plan_path, *, preview_only=False):
     plan = json.loads(Path(plan_path).read_text())
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     report = []
-    for variant in plan["variants"]:
+    for variant in plan["candidates" if preview_only else "variants"]:
         meshes = reset_import(source)
         original_names = {o.name for o in meshes}
         original_by_name = {o.name: o for o in meshes}
@@ -282,6 +419,28 @@ def build(source, out, plan_path):
                 if ratio > 0.3:
                     collisions.append({"a": a, "b": b, "overlap_ratio": ratio})
         augmented = [o for o in bpy.context.scene.objects if o.type == "MESH"]
+        if preview_only:
+            candidate_id = variant["candidate_id"]
+            candidate_dir = out / candidate_id
+            candidate_dir.mkdir(exist_ok=True)
+            options = candidate_camera_options(variant, augmented, spawned, original_by_name, anchor_evidence)
+            selected = options[:2]
+            for index, option in enumerate(selected, 1):
+                render(augmented, candidate_dir / f"start_{index}.png",
+                       option["azimuth_deg"], option["elevation_deg"], 512)
+            report.append({"candidate_id": candidate_id, "level": variant["level"],
+                           "preview_resolution_px": 512,
+                           "candidate_sha256": hashlib.sha256(json.dumps(
+                               variant, ensure_ascii=False, sort_keys=True,
+                               separators=(",", ":")).encode()).hexdigest(),
+                           "question": variant["question"]["text"],
+                           "eligible_cameras": sum(o["eligible"] for o in options),
+                           "anchor_query_evidence": anchor_evidence,
+                           "recommended": selected,
+                           "preview_images": [str(candidate_dir / f"start_{i}.png")
+                                              for i in range(1, len(selected) + 1)],
+                           "auto_adjustments": auto_adjustments})
+            continue
         cam = variant["start_camera"]
         level_dir = out / variant["level"]
         level_dir.mkdir(exist_ok=True)
@@ -344,6 +503,12 @@ def build(source, out, plan_path):
                 detail_path = level_dir / "detail.png"
                 render(target_objects, detail_path, *detail_angle, resolution=512)
                 evidence_views["detail"] = str(detail_path)
+            framing, az, el, coverage = answer_framing(variant, spawned, original_by_name)
+            answer_path = level_dir / "answer_view.png"
+            render(framing, answer_path, az, el, resolution=768)
+            evidence_views["answer_view"] = str(answer_path)
+            evidence_views["answer_view_camera"] = {"azimuth_deg": az, "elevation_deg": el}
+            evidence_views["answer_view_coverage"] = coverage
             evidence_views["target_copy_id"] = target_id
         # Export only imported source meshes and their native-geometry copies.
         bpy.ops.object.select_all(action="DESELECT")
@@ -363,7 +528,8 @@ def build(source, out, plan_path):
                        "evidence_views": evidence_views,
                        "local_view_probes": local_probes,
                        "start_camera": cam})
-    (out / "build_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2))
+    (out / ("probe_report.json" if preview_only else "build_report.json")).write_text(
+        json.dumps(report, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
@@ -373,6 +539,8 @@ if __name__ == "__main__":
             inspect(source, out)
         elif mode == "build":
             build(source, out, rest[0])
+        elif mode == "probe":
+            build(source, out, rest[0], preview_only=True)
         else:
             raise ValueError(f"Unknown worker mode: {mode}")
     except Exception:
