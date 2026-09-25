@@ -14,6 +14,9 @@ HINTS = {
     "supervisor_pass_blind_unsolved": "检查目标是否可通过换焦/旋转找到，以及题干地标是否足够清楚。",
     "supervisor_pass_blind_guessed": "检查揭示视角是否真的显示决定性特征，区分证据不足与盲解器失误。",
     "supervisor_pass_zero_action_answer": "优先检查浏览器初始视角是否泄露答案；再与 Blender 起始图比较。",
+    "blind_unsolved_needs_review": "盲解未完成：检查目标可达性，也要排除模型导航失败。",
+    "blind_guessed_needs_review": "盲解只给出猜测：检查证据是否足够清楚。",
+    "blind_zero_action_answer": "检查浏览器初始视角是否已经泄露答案，以及是否只是盲解器猜测。",
     "blind_builder_answer_mismatch": "独立核对可见证据、题目歧义和生成器答案；不要直接采用任何一方。",
 }
 

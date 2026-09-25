@@ -91,6 +91,20 @@ class BlindTraceTests(unittest.TestCase):
             "supervisor_pass_zero_action_answer": 1})
         self.assertIn("not correctness gold", report["note"])
 
+    def test_no_supervisor_still_flags_navigation_or_start_view_concerns(self):
+        traces = []
+        for status, answer in (("unsolved", ""), ("guessed", "猜的"),
+                               ("observed", "SECRET_BUILDER_ANSWER")):
+            path = self.traces / f"{status}.json"
+            path.write_text(json.dumps(self.trace(status=status, answer=answer)))
+            traces.append(path)
+        report = summarize_traces(traces, self.root)
+        self.assertEqual(report["challenge_counts"], {
+            "blind_guessed_needs_review": 1,
+            "blind_unsolved_needs_review": 1,
+            "blind_zero_action_answer": 1,
+        })
+
     def test_discovers_nested_completed_runs_but_not_partial_traces(self):
         manual = self.traces / "manual.json"
         manual.write_text(json.dumps(self.trace()))

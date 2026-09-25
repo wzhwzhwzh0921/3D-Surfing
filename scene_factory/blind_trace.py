@@ -103,13 +103,15 @@ def summarize_traces(paths: list[Path], runs_root: Path) -> dict:
             supervisor = current_review(work, validation)
             verdict = ((supervisor or {}).get("tiers", {}).get(trace["level"], {}).get("verdict"))
             flags = []
-            if verdict == "pass":
-                if trace["completion_status"] == "unsolved":
-                    flags.append("supervisor_pass_blind_unsolved")
-                elif trace["completion_status"] == "guessed":
-                    flags.append("supervisor_pass_blind_guessed")
-                elif not trace["actions"]:
-                    flags.append("supervisor_pass_zero_action_answer")
+            if trace["completion_status"] == "unsolved":
+                flags.append("supervisor_pass_blind_unsolved" if verdict == "pass"
+                             else "blind_unsolved_needs_review")
+            elif trace["completion_status"] == "guessed":
+                flags.append("supervisor_pass_blind_guessed" if verdict == "pass"
+                             else "blind_guessed_needs_review")
+            elif not trace["actions"]:
+                flags.append("supervisor_pass_zero_action_answer" if verdict == "pass"
+                             else "blind_zero_action_answer")
             if trace["completion_status"] == "observed":
                 independent = unicodedata.normalize("NFKC", str(trace["answer"])).strip().casefold()
                 builder = unicodedata.normalize("NFKC", str(result["answer"]["value"])).strip().casefold()
