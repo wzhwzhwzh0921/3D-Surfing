@@ -39,6 +39,8 @@ sceneqa audit-evaluate --labels /data/human-labels.csv \
 
 其中 `false_accept` 是**人工判 `fail`、起始图泄露答案或明确答案错误，而监督者仍判 `pass`**的题数；`false_accept_rate_among_pass` 用它除以有明确人工结论的监督者通过题数。`start_leak_yes` 单独报告起始图答案捷径的数量；若同一行又把题目质量标为 `pass`，会计入 `human_inconsistent` 并退出准确率分母，待人工修正。`false_accept_wilson95_upper` 是该比例的 Wilson 95% 上界，用来提醒小样本下零误收也并不意味着风险为零。`review` 是弃判，不能混入通过率；`legacy_supervisor` 是旧版看过生成器答案的报告，单独计数，不混入盲审结果。`stale`、`unlabeled`、`human_uncertain` 和 `missing_supervisor` 各有单独计数，不会被默认为正确或错误。
 
+`scene_cluster_audit` 按独立源场景汇总；`by_level.simple/medium/hard.audit_quota` 分别报告每档有人工 gold 的监督通过样本数、误收上界和乐观补样数。零误收时每档至少需要 35 个独立场景的有效通过样本，才能使该档 Wilson 95% 上界低于 10%。`all_levels_target_met` 只有三档都达到这个试验目标才为真；它仍不代替来源多样性、题型覆盖和后续保留集复测。
+
 本地旧产物试跑已导出 2 个场景、6 道题的空白标签表 `scene-qa-runs/iterations-2026-09-25/human-label-template.csv`。评估正确返回 `unlabeled=6`、误收率为 `null`；这仅验证了工作目录到 CSV 再到统计的入口，**没有真实监督准确率证据**。当前环境没有 TokenHub key，暂不能执行 DeepSeek/GLM 的盲审试验。
 
 页面还用本机 Chromium/Playwright 做过交互冒烟：6 张题卡加载，未填写起始图判断时拒绝展开；填写后可打开 3D、输入独立答案、揭示生成器答案，刷新后本地草稿仍在。导出的带 UTF-8 BOM CSV 已重新送入 `audit-evaluate`，程序正确读到 1 条示例标注、5 条未标注，并因缺少监督报告而保持准确率为 `null`。这条示例标注只用于检查交互和文件格式，**不作为人工 gold**。
