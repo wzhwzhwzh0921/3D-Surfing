@@ -314,7 +314,12 @@ verify succeeds or you honestly reject the scene.
 {session_note} Finally write {work / 'agent_notes.md'}
 with a brief per-tier audit: why the start cannot answer, which revealed view
 shows the answer, whether a duplicate or wording shortcut remains, and any
-uncertainty. Do not assert an untested 30-step claim.
+uncertainty. Name the minimum causal exploration steps: for simple, the
+camera change that reveals the hidden feature; for medium, the nearby blocker
+and the view that clears it; for hard, how to resolve the unique first-hop
+landmark and then clear its blocker. Do not add objects or require extra
+camera moves solely to reach an arbitrary action count. Do not assert an
+untested 30-step claim.
 Also write {work / 'visual_quality.json'} after visual review in this form:
 {{"status":"accepted","tiers":{{"simple":{{"status":"pass","reason":"..."}},
 "medium":{{"status":"pass","reason":"..."}},

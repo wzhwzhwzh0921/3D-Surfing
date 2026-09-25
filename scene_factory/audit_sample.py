@@ -26,7 +26,9 @@ def environment(category: str) -> str:
 
 
 def sample_catalog(rows: list[dict], *, per_tier: int = 10, seed: int = 0,
-                   max_bytes: int = 100_000_000) -> list[dict]:
+                   max_bytes: int = 100_000_000,
+                   exclude_uids: set[str] | None = None,
+                   exclude_authors: set[str] | None = None) -> list[dict]:
     if per_tier < 5:
         raise ValueError("per_tier must be at least 5 to cover three environments")
     if max_bytes <= 0:
@@ -37,10 +39,13 @@ def sample_catalog(rows: list[dict], *, per_tier: int = 10, seed: int = 0,
     category_cap = 2 if per_tier <= 10 else max(3, (3 * per_tier + 9) // 10)
     if quotas["unclassified"] < 1:
         raise ValueError("per_tier cannot produce an unclassified quota")
+    excluded = exclude_uids or set()
+    excluded_authors = exclude_authors or set()
     candidates = {}
     for row in rows:
         uid = row.get("uid")
-        if (not uid or row.get("tier") not in ("simple", "complex")
+        if (not uid or uid in excluded or row.get("author") in excluded_authors
+                or row.get("tier") not in ("simple", "complex")
                 or not row.get("download_url") or not isinstance(row.get("bytes"), int)
                 or row["bytes"] <= 0 or row["bytes"] > max_bytes):
             continue
@@ -71,13 +76,26 @@ def sample_catalog(rows: list[dict], *, per_tier: int = 10, seed: int = 0,
 
 
 def write_sample(catalog: Path, output: Path, *, per_tier=10, seed=0,
-                 max_bytes=100_000_000) -> dict:
+                 max_bytes=100_000_000, exclude_catalogs: list[Path] | None = None) -> dict:
     rows = [json.loads(line) for line in catalog.read_text().splitlines() if line.strip()]
-    selected = sample_catalog(rows, per_tier=per_tier, seed=seed, max_bytes=max_bytes)
+    excluded = set()
+    excluded_authors = set()
+    for path in exclude_catalogs or []:
+        for line in path.read_text().splitlines():
+            if not line.strip():
+                continue
+            previous = json.loads(line)
+            excluded.add(previous["uid"])
+            if previous.get("author"):
+                excluded_authors.add(previous["author"])
+    selected = sample_catalog(rows, per_tier=per_tier, seed=seed,
+                              max_bytes=max_bytes, exclude_uids=excluded,
+                              exclude_authors=excluded_authors)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in selected))
     counts = Counter((row["tier"], row["audit_environment"]) for row in selected)
     return {"output": str(output), "scenes": len(selected), "questions_if_built": 3 * len(selected),
             "quota": {f"{tier}/{kind}": count for (tier, kind), count in sorted(counts.items())},
-            "seed": seed, "max_bytes": max_bytes,
+            "seed": seed, "max_bytes": max_bytes, "excluded_scenes": len(excluded),
+            "excluded_authors": len(excluded_authors),
             "download_verified": False, "human_reviewed": False}

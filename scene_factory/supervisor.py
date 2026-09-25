@@ -63,7 +63,11 @@ For each tier, give your own short answer from visible evidence and inspect:
 2. Is the named starting landmark recognizable, and is the question unambiguous?
 3. Do reveal/detail/answer_view show the decisive evidence clearly enough?
 4. Does the inserted object look natural, and does the stated difficulty require
-   the intended exploration or extra reasoning hop?
+   the intended exploration or extra reasoning hop? Simple needs a hidden
+   answer-bearing feature reachable by a camera change. Medium additionally
+   needs a nearby scene prop blocking that feature. Hard additionally needs
+   resolving one unique landmark before the blocked feature can be found.
+   Judge the causal steps, not a fixed number of camera/tool operations.
 5. If the pixels are insufficient, say review; never infer from object names.
 
 Return ONLY one JSON object, without Markdown or other text:
@@ -84,7 +88,11 @@ Replace every placeholder. In particular, each verdict must be exactly one of
 pass, review or revise; never output the literal string pass|review|revise.
 Use pass only when visual evidence supports the answer and intended exploration;
 use revise for a concrete defect the builder can fix; use review when the images
-cannot settle a remaining uncertainty. Do not mark a tier pass because a
+cannot settle a remaining uncertainty. A smaller-than-expected action count
+alone is not a defect if the required observations are still necessary. If
+the start image lacks an identifiable landmark, the answer is visible from
+start, or the answer view cannot show it, use revise with the exact fix.
+Do not mark a tier pass because a
 deterministic geometry check passed. Keep reasons short and actionable.
 If you cannot independently answer, set independent_answer to "unknown" and
 verdict to review or revise. Never guess an answer from the question wording.

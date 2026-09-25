@@ -95,6 +95,8 @@ def parser() -> argparse.ArgumentParser:
     audit.add_argument("--per-tier", type=int, default=10)
     audit.add_argument("--seed", type=int, default=0)
     audit.add_argument("--max-bytes", type=int, default=100_000_000)
+    audit.add_argument("--exclude-catalog", type=Path, action="append", default=[],
+                       help="Previously sampled JSONL; may be repeated for fresh audit waves")
     audit_gallery = sub.add_parser("audit-gallery", help="Show source previews for an audit sample")
     audit_gallery.add_argument("--catalog", type=Path, required=True)
     audit_gallery.add_argument("--runs-root", type=Path, required=True)
@@ -210,7 +212,8 @@ def main() -> None:
                 print(json.dumps(r, ensure_ascii=False))
         elif a.command == "audit-sample":
             print(json.dumps(write_sample(a.catalog, a.output, per_tier=a.per_tier,
-                                          seed=a.seed, max_bytes=a.max_bytes),
+                                          seed=a.seed, max_bytes=a.max_bytes,
+                                          exclude_catalogs=a.exclude_catalog),
                              ensure_ascii=False, indent=2))
         elif a.command == "audit-gallery":
             print(json.dumps(render_audit_gallery(a.catalog, a.runs_root, a.output),

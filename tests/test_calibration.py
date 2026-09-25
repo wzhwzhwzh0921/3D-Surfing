@@ -5,7 +5,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from scene_factory.calibration import evaluate_labels, make_label_template
+from scene_factory.calibration import (evaluate_labels, make_label_template,
+                                       _passes_needed_if_no_more_errors)
 from scene_factory.audit_review import render_label_page
 from scene_factory.supervisor import LEVELS, VIEWS, evidence_hashes
 
@@ -64,6 +65,16 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(report["safe_accept"], 1)
         self.assertEqual(report["false_accept_rate_among_pass"], 0.5)
         self.assertGreater(report["false_accept_wilson95_upper"], 0.5)
+        clustered = report["scene_cluster_audit"]
+        self.assertEqual(clustered["scenes_with_supervisor_pass_and_gold"], 1)
+        self.assertEqual(clustered["scenes_with_any_false_accept"], 1)
+        self.assertFalse(clustered["pilot_target_met"])
+
+    def test_pilot_target_uses_independent_scene_count(self):
+        self.assertEqual(_passes_needed_if_no_more_errors(0, 0.10), 35)
+        self.assertGreater(_passes_needed_if_no_more_errors(1, 0.10), 35)
+        report = evaluate_labels(self.labels, self.root)
+        self.assertEqual(report["scene_cluster_audit"]["additional_scenes_if_no_more_errors"], 35)
 
     def test_changed_image_or_asset_invalidates_human_label(self):
         self._fill()

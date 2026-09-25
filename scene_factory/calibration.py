@@ -68,6 +68,22 @@ def _wilson_upper(errors: int, total: int) -> float | None:
     return (p + z * z / (2 * total) + z * sqrt(p * (1 - p) / total + z * z / (4 * total * total))) / (1 + z * z / total)
 
 
+def _passes_needed_if_no_more_errors(errors: int, target_upper: float) -> int:
+    """Optimistic sample floor, never a predicted number of future passes."""
+    if not 0 < target_upper < 1:
+        raise ValueError("target_upper must be between zero and one")
+    low, high = max(errors, 1), max(errors, 1)
+    while _wilson_upper(errors, high) > target_upper:
+        high *= 2
+    while low < high:
+        mid = (low + high) // 2
+        if _wilson_upper(errors, mid) <= target_upper:
+            high = mid
+        else:
+            low = mid + 1
+    return low
+
+
 def evaluate_labels(labels: Path, runs_root: Path) -> dict:
     root = runs_root.resolve()
     with labels.open(encoding="utf-8-sig", newline="") as handle:
@@ -84,6 +100,8 @@ def evaluate_labels(labels: Path, runs_root: Path) -> dict:
               "false_accept": 0, "safe_accept": 0, "caught_or_abstained": 0}
     seen = set()
     scene_cache = {}
+    pass_scenes = set()
+    false_accept_scenes = set()
     by_level = {level: {"gold_binary": 0, "false_accept": 0,
                         "supervisor_pass": 0, "start_leak_yes": 0}
                 for level in LEVELS}
@@ -156,9 +174,11 @@ def evaluate_labels(labels: Path, runs_root: Path) -> dict:
         counts["gold_binary"] += 1
         by_level[row["level"]]["gold_binary"] += 1
         if judgment == "pass":
+            pass_scenes.add(work)
             by_level[row["level"]]["supervisor_pass"] += 1
             if gold_bad:
                 counts["false_accept"] += 1
+                false_accept_scenes.add(work)
                 by_level[row["level"]]["false_accept"] += 1
             else:
                 counts["safe_accept"] += 1
@@ -168,5 +188,20 @@ def evaluate_labels(labels: Path, runs_root: Path) -> dict:
         counts["false_accept"] / counts["supervisor_pass"] if counts["supervisor_pass"] else None)
     counts["false_accept_wilson95_upper"] = _wilson_upper(
         counts["false_accept"], counts["supervisor_pass"])
+    # Three questions from one scene share source quality and generation errors.
+    # Treating them as three independent draws would overstate precision.
+    scene_total = len(pass_scenes)
+    scene_errors = len(false_accept_scenes)
+    target = 0.10
+    needed = _passes_needed_if_no_more_errors(scene_errors, target)
+    counts["scene_cluster_audit"] = {
+        "scenes_with_supervisor_pass_and_gold": scene_total,
+        "scenes_with_any_false_accept": scene_errors,
+        "false_accept_wilson95_upper": _wilson_upper(scene_errors, scene_total),
+        "pilot_target_upper": target,
+        "minimum_scenes_if_no_more_errors": needed,
+        "additional_scenes_if_no_more_errors": max(0, needed - scene_total),
+        "pilot_target_met": scene_total >= needed,
+    }
     counts["by_level"] = by_level
     return counts

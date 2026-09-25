@@ -44,6 +44,31 @@ class AuditSampleTests(unittest.TestCase):
         self.assertEqual(environment("街角巷道"), "outdoor")
         self.assertEqual(environment("居家室内"), "indoor")
 
+    def test_followup_wave_excludes_prior_sample(self):
+        rows = []
+        for tier in ("simple", "complex"):
+            for kind, categories in (("indoor", ("居家室内", "办公与公共室内",
+                                                   "商业公共空间", "多房间与多层住宅")),
+                                     ("outdoor", ("林地营地", "庭院花园", "街角巷道", "城镇村落")),
+                                     ("unclassified", ("其他主题场景（待细分）", "住宅与公寓"))):
+                for index in range(30):
+                    uid = f"{tier}-{kind}-{index}"
+                    rows.append({"uid": uid, "tier": tier,
+                                 "category": categories[index % len(categories)],
+                                 "author": uid, "bytes": 100,
+                                 "download_url": f"https://example.test/{uid}.glb"})
+        with tempfile.TemporaryDirectory() as tmp:
+            catalog = Path(tmp) / "catalog.jsonl"
+            first = Path(tmp) / "first.jsonl"
+            second = Path(tmp) / "second.jsonl"
+            catalog.write_text("".join(json.dumps(row) + "\n" for row in rows))
+            write_sample(catalog, first, seed=7)
+            result = write_sample(catalog, second, seed=8, exclude_catalogs=[first])
+            first_ids = {json.loads(line)["uid"] for line in first.read_text().splitlines()}
+            second_ids = {json.loads(line)["uid"] for line in second.read_text().splitlines()}
+            self.assertFalse(first_ids & second_ids)
+            self.assertEqual(result["excluded_scenes"], 20)
+
     def test_insufficient_quota_fails_without_partial_output(self):
         with tempfile.TemporaryDirectory() as tmp:
             catalog = Path(tmp) / "catalog.jsonl"
