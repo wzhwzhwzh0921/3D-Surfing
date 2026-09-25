@@ -1,0 +1,93 @@
+"""Summarize tool-driven blind trials without treating action counts as quality gold."""
+from __future__ import annotations
+
+from collections import Counter
+import hashlib
+import json
+from pathlib import Path
+from statistics import median
+
+from .supervisor import LEVELS
+
+
+TOOLS = frozenset({"focus_at", "zoom", "orbit", "move", "undo_view"})
+COMPLETIONS = frozenset({"observed", "guessed", "unsolved"})
+
+
+def _valid_trace(trace: dict) -> bool:
+    actions = trace.get("actions")
+    if (trace.get("schema_version") != "sceneqa_blind_trial_v1" or
+            trace.get("render_protocol") != "modelviewer_perspective_v1" or
+            trace.get("level") not in LEVELS or not isinstance(actions, list) or
+            trace.get("successful_action_count") != len(actions) or
+            trace.get("completion_status") not in COMPLETIONS or
+            (trace.get("completion_status") != "unsolved" and not str(trace.get("answer", "")).strip())):
+        return False
+    observation = "frame_0001"
+    for index, action in enumerate(actions, 2):
+        after = f"frame_{index:04d}"
+        if (not isinstance(action, dict) or action.get("tool") not in TOOLS or
+                not isinstance(action.get("args"), dict) or
+                action.get("before_observation_id") != observation or
+                action.get("after_observation_id") != after):
+            return False
+        observation = after
+    return trace.get("final_observation_id") == observation
+
+
+def _bucket(traces: list[dict]) -> dict:
+    statuses = Counter(t["completion_status"] for t in traces)
+    observed_actions = [len(t["actions"]) for t in traces if t["completion_status"] == "observed"]
+    tools = Counter(a["tool"] for t in traces for a in t["actions"])
+    sorted_actions = sorted(observed_actions)
+    p90 = (sorted_actions[(9 * len(sorted_actions) + 9) // 10 - 1]
+           if sorted_actions else None)
+    return {"trials": len(traces), "unique_assets": len({t["asset_sha256"] for t in traces}),
+            "observed": statuses["observed"], "guessed": statuses["guessed"],
+            "unsolved": statuses["unsolved"],
+            "median_actions_observed": median(observed_actions) if observed_actions else None,
+            "p90_actions_observed": p90,
+            "zero_action_observed": sum(n == 0 for n in observed_actions),
+            "tool_calls": dict(sorted(tools.items()))}
+
+
+def summarize_traces(paths: list[Path], runs_root: Path) -> dict:
+    root = runs_root.resolve()
+    manifests = {}
+    for path in root.rglob("output/validation.json"):
+        validation = json.loads(path.read_text())
+        work = path.parent.parent
+        for result in validation["results"]:
+            key = (validation.get("scene_id") or work.name, result["level"])
+            manifests.setdefault(key, []).append((work, result))
+    valid = []
+    rejected = {"invalid": [], "stale": []}
+    for path in paths:
+        try:
+            trace = json.loads(path.read_text())
+        except (OSError, ValueError):
+            rejected["invalid"].append(str(path))
+            continue
+        if not isinstance(trace, dict) or not _valid_trace(trace):
+            rejected["invalid"].append(str(path))
+            continue
+        candidates = manifests.get((trace.get("scene_id"), trace["level"]), [])
+        current = False
+        for work, result in candidates:
+            asset = work / "output" / trace["level"] / "scene.glb"
+            if (result["question"] == trace.get("question") and
+                    result["sha256"] == trace.get("asset_sha256") and
+                    result["start_camera"] == trace.get("start_camera_blender") and
+                    asset.is_file() and hashlib.sha256(asset.read_bytes()).hexdigest() == result["sha256"]):
+                current = True
+                break
+        if current:
+            valid.append(trace)
+        else:
+            rejected["stale"].append(str(path))
+    return {"render_protocol": "modelviewer_perspective_v1",
+            "note": "Tool counts describe navigation; observed status and answers are self-reported, not correctness gold.",
+            "input_traces": len(paths), "valid_traces": len(valid), "rejected": rejected,
+            "overall": _bucket(valid),
+            "by_level": {level: _bucket([t for t in valid if t["level"] == level])
+                         for level in LEVELS}}

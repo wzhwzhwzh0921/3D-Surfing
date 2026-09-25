@@ -14,3 +14,6 @@ sceneqa = "scene_factory.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["scene_factory*"]
+
+[tool.setuptools.package-data]
+scene_factory = ["static/*.html"]

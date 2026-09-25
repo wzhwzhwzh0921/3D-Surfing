@@ -15,6 +15,8 @@ from .audit_sample import write_sample
 from .audit_gallery import render_audit_gallery
 from .calibration import evaluate_labels, make_label_template
 from .audit_review import render_label_page
+from .blind_review import render_blind_trial
+from .blind_trace import summarize_traces
 from .runner import ROOT, blender, run_batch, run_one, supervise_existing
 from .question_types import QUESTION_TYPES, type_order
 from .suitability import screen
@@ -114,6 +116,15 @@ def parser() -> argparse.ArgumentParser:
     audit_review.add_argument("--labels", type=Path, required=True)
     audit_review.add_argument("--runs-root", type=Path, required=True)
     audit_review.add_argument("--output", type=Path, required=True)
+    blind_review = sub.add_parser("blind-review", help="Create a tool-driven, answer-blind 3D trial")
+    blind_review.add_argument("--work", type=Path, required=True)
+    blind_review.add_argument("--level", choices=("simple", "medium", "hard"), required=True)
+    blind_review.add_argument("--output", type=Path, required=True)
+    blind_summary = sub.add_parser("blind-summarize", help="Summarize bound blind exploration traces")
+    blind_summary.add_argument("--traces", type=Path, required=True,
+                               help="Directory containing exported trial JSON files")
+    blind_summary.add_argument("--runs-root", type=Path, required=True)
+    blind_summary.add_argument("--output", type=Path)
     preflight = sub.add_parser("preflight")
     preflight.add_argument("--inventory", type=Path, required=True)
     inspect = sub.add_parser("inspect")
@@ -231,6 +242,15 @@ def main() -> None:
         elif a.command == "audit-review":
             print(json.dumps(render_label_page(a.labels, a.runs_root, a.output),
                              ensure_ascii=False, indent=2))
+        elif a.command == "blind-review":
+            print(json.dumps(render_blind_trial(a.work, a.level, a.output),
+                             ensure_ascii=False, indent=2))
+        elif a.command == "blind-summarize":
+            report = summarize_traces(sorted(a.traces.glob("*.json")), a.runs_root)
+            if a.output:
+                a.output.parent.mkdir(parents=True, exist_ok=True)
+                a.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+            print(json.dumps(report, ensure_ascii=False, indent=2))
         elif a.command == "preflight":
             print(json.dumps(screen(json.loads(a.inventory.read_text())), ensure_ascii=False, indent=2))
         elif a.command == "inspect":

@@ -3,6 +3,8 @@
 !.env.example
 __pycache__/
 .pytest_cache/
+build/
+*.egg-info/
 *.pyc
 runs/
 *.glb

@@ -92,6 +92,8 @@ cd /data/sceneqa-runs/<uid> && python3 -m http.server 8000
 
 人工审核可用 [`audit-template`、`audit-review` 与 `audit-evaluate`](docs/CALIBRATION.md)逐题查看 GLB、导出 gold 标签，并测量监督者误收、弃判和样本覆盖；旧标签绑定原题、GLB 与证据图，返修后不会继续计入统计。
 
+需要检验实际探索过程时，可用 [`blind-review` 与 `blind-summarize`](docs/BLIND_TRIAL.md)生成只含题目和 3D 场景的工具操作页，导出逐步相机轨迹与独立答案。网页使用透视相机，和 Blender 正交起始图属于不同渲染协议；轨迹操作数不自动等于难度或答案正确率。
+
 首轮审核可用 `sceneqa audit-sample` 按来源难度和室内/室外分类抽样，再用 `sceneqa batch --dry-run` 生成原场景预览，最后用 `sceneqa audit-gallery` 汇总四视角。仓库保存了[20 场景抽样与预检记录](docs/AUDIT_PILOT_2026-09-26.md)；这些场景已验证可下载和渲染，尚未生成三档问答，也未经过人工入库审核。
 
 若改用 Codex Sol 逐场景手工调用，使用[单场景任务模板](docs/CODEX_SOL_TASK.md)，每次替换源 GLB、工作目录和仓库路径；该模板包含相同的反捷径与视觉复核要求。

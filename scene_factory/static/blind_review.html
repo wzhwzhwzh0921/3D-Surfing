@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SceneQA 盲测探索</title>
+<script type="module" src="https://unpkg.com/@google/model-viewer@4.1.0/dist/model-viewer.min.js"></script>
+<style>
+  *{box-sizing:border-box}body{font:16px/1.5 system-ui,sans-serif;background:#edf2f6;color:#1b2b38;margin:0}
+  main{max-width:1300px;margin:auto;padding:18px}h1{font-size:1.5rem;margin:0 0 8px}h2{font-size:1rem;margin:14px 0 6px}
+  .muted{color:#536877}.layout{display:grid;grid-template-columns:minmax(340px,2fr) minmax(280px,1fr);gap:16px}
+  .panel{background:white;border-radius:12px;padding:14px;box-shadow:0 2px 12px #0001}
+  model-viewer{display:block;width:100%;height:min(68vh,700px);min-height:430px;background:#dce5ea;cursor:crosshair}
+  .row{display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin:8px 0}label{display:flex;flex-direction:column;gap:3px;font-size:.9rem}
+  input,select{font:inherit;padding:7px;border:1px solid #aab8c4;border-radius:6px;width:100px}
+  input[type=text]{width:100%}button{font:inherit;background:#15588f;border:0;color:white;border-radius:6px;padding:8px 12px;cursor:pointer}
+  button:hover{background:#0c416c}button:disabled{opacity:.5;cursor:default}.secondary{background:#556d80}
+  #status{min-height:28px;color:#36516b}.error{color:#a12828!important}.question{font-size:1.2rem;font-weight:650}
+  .stats{display:flex;gap:16px;flex-wrap:wrap;font-size:.9rem;color:#536877}
+  #trail{max-height:210px;overflow:auto;padding-left:22px;font-size:.86rem}#trail li{margin:4px 0}
+  .answer{border-top:1px solid #d9e2e9;margin-top:12px;padding-top:10px}
+  @media(max-width:850px){.layout{grid-template-columns:1fr}model-viewer{height:54vh;min-height:360px}}
+</style>
+<main>
+  <h1>3D 场景盲测</h1>
+  <p class="muted">只依据题目和当前画面探索。点击模型可换焦；角度、距离、缩放均自行填写。导出轨迹前请先填写独立答案。</p>
+  <div class="layout">
+    <section class="panel">
+      <p class="question" id="question"></p>
+      <div class="stats"><span id="scene-id"></span><span id="level"></span><span id="observation"></span><span id="count"></span></div>
+      <model-viewer id="scene" src="__SCENE_SRC__" interaction-prompt="none" shadow-intensity="1" alt="待探索的 3D 场景"></model-viewer>
+      <p id="status" role="status">正在加载 3D 场景……</p>
+    </section>
+    <section class="panel">
+      <h2>换焦</h2>
+      <p class="muted">点击画面中的可见模型表面，或输入画面归一化坐标（左上 0,0；右下 1,1）。</p>
+      <div class="row"><label>x<input id="focus-x" type="number" min="0" max="1" step="0.01" value="0.5"></label>
+        <label>y<input id="focus-y" type="number" min="0" max="1" step="0.01" value="0.5"></label>
+        <button data-tool="focus_at">focus_at</button></div>
+      <h2>旋转与缩放</h2>
+      <div class="row"><label>水平角度 °<input id="yaw" type="number" step="any" value="35"></label>
+        <label>俯仰角度 °<input id="pitch" type="number" step="any" value="0"></label>
+        <button data-tool="orbit">orbit</button></div>
+      <div class="row"><label>缩放倍率<input id="factor" type="number" min="0.25" max="4" step="any" value="1.6"></label>
+        <button data-tool="zoom">zoom</button></div>
+      <h2>平移</h2>
+      <div class="row"><label>方向<select id="direction"><option>left</option><option>right</option><option>up</option>
+        <option>down</option><option>forward</option><option>backward</option></select></label>
+        <label>场景对角线比例<input id="distance" type="number" min="0.001" max="2" step="any" value="0.1"></label>
+        <button data-tool="move">move</button></div>
+      <div class="row"><button class="secondary" data-tool="undo_view">undo_view：退回上一视角</button></div>
+      <h2>操作轨迹</h2><ol id="trail"></ol>
+      <div class="answer"><label style="width:100%">独立答案<input id="answer" type="text" autocomplete="off" placeholder="请先探索再作答"></label>
+        <div class="row"><label>作答状态<select id="completion"><option value="observed">看清证据后作答</option>
+          <option value="guessed">仍有不确定，只能猜测</option><option value="unsolved">无法解答</option></select></label></div>
+        <label style="width:100%">决定性线索或未解原因<input id="evidence-note" type="text" placeholder="例如：旋转到背面才看见标签"></label>
+        <div class="row"><button id="export" type="button">导出答案与轨迹 JSON</button></div>
+        <p class="muted">本页不包含生成器答案、物体名称或额外证据截图。操作次数是描述数据，不是自动难度分数。</p></div>
+    </section>
+  </div>
+</main>
+<script id="trial-config" type="application/json">__CONFIG__</script>
+<script>
+const config=JSON.parse(document.querySelector('#trial-config').textContent);
+const viewer=document.querySelector('#scene'),status=document.querySelector('#status');
+document.querySelector('#question').textContent=config.question;
+document.querySelector('#scene-id').textContent='场景 '+config.scene_id;
+document.querySelector('#level').textContent='档位 '+config.level;
+viewer.cameraOrbit=config.start_orbit;
+let ready=false,revision=1,history=[],actions=[],initialTarget=null,diagonal=1,busy=false;
+const radians=d=>d*Math.PI/180;
+const frame=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+const observationId=()=>`frame_${String(revision).padStart(4,'0')}`;
+const pose=()=>({orbit:viewer.getCameraOrbit().toString(),target:viewer.getCameraTarget().toString()});
+const fail=error=>({ok:false,error,observation_id:observationId()});
+function draw(){
+  document.querySelector('#observation').textContent='观察 '+observationId();
+  document.querySelector('#count').textContent=`${actions.length} 次成功操作`;
+  document.querySelector('#trail').replaceChildren(...actions.map((a,i)=>{
+    const li=document.createElement('li');li.textContent=`${i+1}. ${a.tool} ${JSON.stringify(a.args)} → ${a.after_observation_id}`;return li;}));
+}
+function setStatus(message,error=false){status.textContent=message;status.classList.toggle('error',error)}
+viewer.addEventListener('load',async()=>{
+  viewer.jumpCameraToGoal();await frame();
+  const d=viewer.getDimensions();diagonal=Math.max(Math.hypot(d.x,d.y,d.z),0.001);
+  initialTarget=viewer.getCameraTarget();ready=true;draw();setStatus('场景已加载。点击可见模型表面换焦。');
+});
+viewer.addEventListener('error',()=>setStatus('GLB 加载失败；请从包含模型文件的 HTTP 服务打开本页。',true));
+async function act(tool,args={}){
+  if(!ready)return fail('not_ready');
+  if(busy)return fail('busy');
+  if(args.observation_id!==observationId())return fail('stale_observation');
+  busy=true;
+  const before=pose(),beforeId=observationId();
+  let nextOrbit=before.orbit,nextTarget=before.target,restoredFrom;
+  try{
+    if(tool==='focus_at'){
+      const {x,y}=args;
+      if(![x,y].every(v=>Number.isFinite(v)&&v>=0&&v<=1))return fail('invalid_coordinates');
+      const rect=viewer.getBoundingClientRect();
+      const hit=viewer.positionAndNormalFromPoint(rect.left+x*rect.width,rect.top+y*rect.height);
+      if(!hit)return fail('no_surface_at_point');
+      const p=hit.position;nextTarget=`${p.x}m ${p.y}m ${p.z}m`;
+      const current=viewer.getCameraTarget();
+      if(Math.hypot(p.x-current.x,p.y-current.y,p.z-current.z)<diagonal*1e-6)return fail('no_view_change');
+    }else if(tool==='zoom'){
+      if(!Number.isFinite(args.factor)||args.factor<0.25||args.factor>4)return fail('invalid_factor');
+      if(args.factor===1)return fail('no_view_change');
+      const orbit=viewer.getCameraOrbit();
+      const radius=orbit.radius/args.factor;
+      if(radius<diagonal*0.005||radius>diagonal*20)return fail('distance_limit');
+      nextOrbit=`${orbit.theta}rad ${orbit.phi}rad ${radius}m`;
+    }else if(tool==='orbit'){
+      if(![args.yaw,args.pitch].every(Number.isFinite))return fail('invalid_angles');
+      if(args.yaw===0&&args.pitch===0)return fail('no_view_change');
+      const orbit=viewer.getCameraOrbit();
+      const phi=orbit.phi-radians(args.pitch);
+      if(phi<radians(5)||phi>radians(175))return fail('elevation_limit');
+      nextOrbit=`${orbit.theta+radians(args.yaw)}rad ${phi}rad ${orbit.radius}m`;
+    }else if(tool==='move'){
+      const directions=['left','right','up','down','forward','backward'];
+      if(!directions.includes(args.direction))return fail('invalid_direction');
+      if(!Number.isFinite(args.distance)||args.distance<=0||args.distance>2)return fail('invalid_distance');
+      const {theta,phi}=viewer.getCameraOrbit(),t=viewer.getCameraTarget(),scale=diagonal*args.distance;
+      const outward=[Math.sin(phi)*Math.sin(theta),Math.cos(phi),Math.sin(phi)*Math.cos(theta)];
+      const right=[Math.cos(theta),0,-Math.sin(theta)];
+      const up=[-Math.cos(phi)*Math.sin(theta),Math.sin(phi),-Math.cos(phi)*Math.cos(theta)];
+      const axes={left:right.map(v=>-v),right,up,down:up.map(v=>-v),
+                  forward:outward.map(v=>-v),backward:outward};
+      const axis=axes[args.direction],next=[t.x+axis[0]*scale,t.y+axis[1]*scale,t.z+axis[2]*scale];
+      if(Math.hypot(next[0]-initialTarget.x,next[1]-initialTarget.y,next[2]-initialTarget.z)>diagonal*8)
+        return fail('scene_extent_limit');
+      nextTarget=`${next[0]}m ${next[1]}m ${next[2]}m`;
+    }else if(tool==='undo_view'){
+      if(!history.length)return fail('no_previous_view');
+      const previous=history[history.length-1];nextOrbit=previous.pose.orbit;nextTarget=previous.pose.target;
+      restoredFrom=previous.observation_id;
+    }else return fail('unknown_tool');
+    if(tool==='undo_view')history.pop();else history.push({pose:before,observation_id:beforeId});
+    viewer.cameraOrbit=nextOrbit;viewer.cameraTarget=nextTarget;viewer.jumpCameraToGoal();await frame();
+    revision++;
+    const afterId=observationId();
+    actions.push({tool,args:Object.fromEntries(Object.entries(args).filter(([key])=>key!=='observation_id')),
+      before_observation_id:beforeId,after_observation_id:afterId,before_pose:before,after_pose:pose(),
+      restored_from_observation_id:restoredFrom||null,at:new Date().toISOString()});
+    draw();setStatus(`${tool} 已执行：${afterId}`);
+    return {ok:true,observation_id:afterId,undo_available:history.length};
+  }finally{busy=false}
+}
+window.sceneqaAgent={snapshot:()=>({observation_id:observationId(),ready,
+  width:viewer.clientWidth,height:viewer.clientHeight,undo_available:history.length,actions:actions.length}),
+  act,trace:()=>({config,actions:structuredClone(actions)})};
+document.querySelectorAll('[data-tool]').forEach(button=>button.addEventListener('click',async()=>{
+  const tool=button.dataset.tool,args={observation_id:observationId()};
+  if(tool==='focus_at'){args.x=Number(document.querySelector('#focus-x').value);args.y=Number(document.querySelector('#focus-y').value)}
+  if(tool==='orbit'){args.yaw=Number(document.querySelector('#yaw').value);args.pitch=Number(document.querySelector('#pitch').value)}
+  if(tool==='zoom')args.factor=Number(document.querySelector('#factor').value);
+  if(tool==='move'){args.direction=document.querySelector('#direction').value;args.distance=Number(document.querySelector('#distance').value)}
+  const result=await act(tool,args);if(!result.ok)setStatus(`${tool} 未执行：${result.error}`,true);
+}));
+viewer.addEventListener('click',async event=>{
+  if(!ready)return;
+  const rect=viewer.getBoundingClientRect(),x=(event.clientX-rect.left)/rect.width,y=(event.clientY-rect.top)/rect.height;
+  document.querySelector('#focus-x').value=x.toFixed(3);document.querySelector('#focus-y').value=y.toFixed(3);
+  const result=await act('focus_at',{observation_id:observationId(),x,y});
+  if(!result.ok)setStatus(`focus_at 未执行：${result.error}`,true);
+});
+document.querySelector('#export').addEventListener('click',()=>{
+  const answer=document.querySelector('#answer').value.trim();
+  const completion=document.querySelector('#completion').value;
+  if(completion!=='unsolved'&&!answer){setStatus('请先填写独立答案，或将状态设为无法解答。',true);return}
+  const payload={...config,answer,completion_status:completion,
+    evidence_note:document.querySelector('#evidence-note').value.trim(),
+    actions,successful_action_count:actions.length,
+    final_observation_id:observationId(),exported_at:new Date().toISOString()};
+  const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
+  const link=document.createElement('a');link.href=URL.createObjectURL(blob);
+  link.download=`sceneqa-blind-${config.scene_id}-${config.level}.json`;link.click();
+  setTimeout(()=>URL.revokeObjectURL(link.href),1000);
+});
+</script>
+</html>
