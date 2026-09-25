@@ -7,19 +7,21 @@ import unittest
 from unittest.mock import patch
 
 from scene_factory.cli import render_report
-from scene_factory.runner import combined_usage, run_model_phase, supervise_and_repair
+from scene_factory.runner import combined_usage, repair_change_summary, run_model_phase, supervise_and_repair
 from scene_factory.supervisor import (LEVELS, VIEWS, checked_image_reads,
-                                      evidence_hashes, extract_result, review_outcome, validate_review)
+                                      evidence_hashes, extract_result, reconcile_independent_answers,
+                                      review_outcome, review_prompt, validate_review)
 
 
 def verdicts(simple="pass", medium="pass", hard="pass"):
     rows = {}
     for level, verdict in zip(LEVELS, (simple, medium, hard)):
-        rows[level] = {"verdict": verdict, "reason": f"Visible evidence for {level}",
+        rows[level] = {"verdict": verdict, "independent_answer": level,
+                       "reason": f"Visible evidence for {level}",
                        "evidence_views": [f"{level}/start.png", f"{level}/answer_view.png"]}
         if verdict == "revise":
             rows[level]["repair_instruction"] = "Move the target and re-probe"
-    return {"schema_version": "sceneqa_supervisor_v1", "tiers": rows}
+    return {"schema_version": "sceneqa_supervisor_v2", "tiers": rows}
 
 
 def validation_fixture():
@@ -68,6 +70,23 @@ class SupervisorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "outside the rendered evidence"):
             checked_image_reads(stream, self.work)
 
+    def test_blind_review_withholds_builder_answer_and_disagreement_needs_review(self):
+        validation = validation_fixture()
+        validation["results"][0]["answer"]["value"] = "secret-builder-answer"
+        prompt = review_prompt(self.work, validation)
+        self.assertNotIn("secret-builder-answer", prompt)
+        report = reconcile_independent_answers(validate_review(verdicts()), validation)
+        self.assertEqual(report["tiers"]["simple"]["answer_agreement"], "mismatch")
+        self.assertEqual(report["tiers"]["simple"]["verdict"], "review")
+        self.assertEqual(report["tiers"]["medium"]["verdict"], "pass")
+
+    def test_unknown_answer_cannot_pass(self):
+        report = verdicts()
+        report["tiers"]["hard"]["independent_answer"] = "unknown"
+        reconciled = reconcile_independent_answers(validate_review(report), validation_fixture())
+        self.assertEqual(reconciled["tiers"]["hard"]["answer_agreement"], "unknown")
+        self.assertEqual(reconciled["tiers"]["hard"]["verdict"], "review")
+
     def test_reviewer_cli_has_read_only_tools_and_no_upstream_secret(self):
         @contextmanager
         def fake_bridge(**_kwargs):
@@ -107,6 +126,16 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(usage["completed_api_calls"], 4)
         self.assertEqual(usage["input_tokens"], 200)
         self.assertEqual(usage["cache_hit_rate"], 0.75)
+
+    def test_repair_record_separates_answer_fix_from_question_replacement(self):
+        before = {"variants": [{"question": {"text": "How many?", "declared_answer": 2}},
+                               {"question": {"text": "What color?", "declared_answer": "red"}},
+                               {"question": {"text": "Where?", "declared_answer": "left"}}]}
+        after = {"variants": [{"question": {"text": "How many?", "declared_answer": 3}},
+                              {"question": {"text": "What color?", "declared_answer": "red"}},
+                              {"question": {"text": "Which object?", "declared_answer": "left"}}]}
+        self.assertEqual(repair_change_summary(before, after),
+                         {"changed_question_levels": ["hard"], "changed_answer_levels": ["simple"]})
 
     def test_repair_rechecks_and_keeps_improvement(self):
         reports = [verdicts(medium="revise"), verdicts()]

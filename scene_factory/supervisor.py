@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import hashlib
 from pathlib import Path
+import unicodedata
 
 LEVELS = ("simple", "medium", "hard")
 VIEWS = ("start", "reveal", "detail", "answer_view")
@@ -18,22 +19,24 @@ def evidence_hashes(work: Path) -> dict[str, str]:
 
 
 def review_prompt(work: Path, validation: dict) -> str:
-    """Expose questions, proposed answers and pixels, but no builder reasoning."""
+    """Expose questions and pixels, but withhold the builder's proposed answers."""
     items = []
     for result in validation["results"]:
         level = result["level"]
         images = "\n".join(str(work / "output" / level / f"{view}.png") for view in VIEWS)
-        items.append(f"{level}: question={result['question']!r}; proposed_answer={result['answer']['value']!r}\n"
+        items.append(f"{level}: question_type={result.get('question_type', 'unknown')!r}; "
+                     f"question={result['question']!r}\n"
                      f"Read these four images:\n{images}")
     return f"""You are the INDEPENDENT supervisor for a 3D exploration-QA item.
 Do not read plan.json, candidates.json, visual_quality.json, inventory, code,
-builder notes or previous supervisor reports. Judge only the three questions,
-proposed answers and the twelve rendered images listed below. Use Read to open
-EVERY image. You have no editing or shell tools.
+builder notes or previous supervisor reports. Judge only the three questions
+and the twelve rendered images listed below. The builder's answers have been
+withheld so you can answer independently. Use Read to open EVERY image.
+You have no editing or shell tools.
 
 {chr(10).join(items)}
 
-For each tier, challenge the proposed answer and inspect:
+For each tier, give your own short answer from visible evidence and inspect:
 1. Can the start image alone, or an identical original object, reveal the answer?
 2. Is the named starting landmark recognizable, and is the question unambiguous?
 3. Do reveal/detail/answer_view show the decisive evidence clearly enough?
@@ -42,14 +45,17 @@ For each tier, challenge the proposed answer and inspect:
 5. If the pixels are insufficient, say review; never infer from object names.
 
 Return ONLY one JSON object, without Markdown or other text:
-{{"schema_version":"sceneqa_supervisor_v1","tiers":{{
- "simple":{{"verdict":"pass|review|revise","reason":"concrete visible evidence",
+{{"schema_version":"sceneqa_supervisor_v2","tiers":{{
+ "simple":{{"verdict":"pass|review|revise","independent_answer":"short answer or unknown",
+            "reason":"concrete visible evidence",
             "evidence_views":["simple/start.png","simple/answer_view.png"],
             "repair_instruction":"specific edit, required only for revise"}},
- "medium":{{"verdict":"pass|review|revise","reason":"concrete visible evidence",
+ "medium":{{"verdict":"pass|review|revise","independent_answer":"short answer or unknown",
+            "reason":"concrete visible evidence",
             "evidence_views":["medium/start.png","medium/answer_view.png"],
             "repair_instruction":"specific edit, required only for revise"}},
- "hard":{{"verdict":"pass|review|revise","reason":"concrete visible evidence",
+ "hard":{{"verdict":"pass|review|revise","independent_answer":"short answer or unknown",
+          "reason":"concrete visible evidence",
           "evidence_views":["hard/start.png","hard/answer_view.png"],
           "repair_instruction":"specific edit, required only for revise"}}}}}}
 Replace every placeholder. In particular, each verdict must be exactly one of
@@ -58,6 +64,9 @@ Use pass only when visual evidence supports the answer and intended exploration;
 use revise for a concrete defect the builder can fix; use review when the images
 cannot settle a remaining uncertainty. Do not mark a tier pass because a
 deterministic geometry check passed. Keep reasons short and actionable.
+If you cannot independently answer, set independent_answer to "unknown" and
+verdict to review or revise. Never guess an answer from the question wording.
+For a numeric count, return only the integer, with no unit or explanatory text.
 """
 
 
@@ -111,7 +120,7 @@ def checked_image_reads(stream_path: Path, work: Path) -> list[str]:
 
 
 def validate_review(review: dict) -> dict:
-    if review.get("schema_version") != "sceneqa_supervisor_v1":
+    if review.get("schema_version") != "sceneqa_supervisor_v2":
         raise ValueError("Supervisor report has the wrong schema version")
     tiers = review.get("tiers")
     if not isinstance(tiers, dict) or set(tiers) != set(LEVELS):
@@ -122,12 +131,38 @@ def validate_review(review: dict) -> dict:
             raise ValueError(f"Supervisor {level} verdict must be pass/review/revise")
         if not isinstance(row.get("reason"), str) or not row["reason"].strip():
             raise ValueError(f"Supervisor {level} needs a concrete reason")
+        answer = row.get("independent_answer")
+        if not isinstance(answer, (str, int, float)) or not str(answer).strip():
+            raise ValueError(f"Supervisor {level} needs an independent answer or unknown")
         views = row.get("evidence_views")
         allowed = {f"{level}/{view}.png" for view in VIEWS}
         if not isinstance(views, list) or not views or not set(views) <= allowed:
             raise ValueError(f"Supervisor {level} must cite its own evidence views")
         if row["verdict"] == "revise" and not str(row.get("repair_instruction", "")).strip():
             raise ValueError(f"Supervisor {level} needs a repair instruction")
+    return review
+
+
+def _answer_key(value: object) -> str:
+    normalized = unicodedata.normalize("NFKC", str(value)).strip().casefold()
+    return " ".join(normalized.split()).rstrip("。.!！")
+
+
+def reconcile_independent_answers(review: dict, validation: dict) -> dict:
+    """Flag disagreements for human review; never turn an answer into gold."""
+    results = {result["level"]: result for result in validation["results"]}
+    for level in LEVELS:
+        row = review["tiers"][level]
+        independent = _answer_key(row["independent_answer"])
+        expected = _answer_key(results[level]["answer"]["value"])
+        agreement = ("unknown" if independent in {"unknown", "不知道", "无法判断"}
+                     else "match" if independent == expected else "mismatch")
+        row["answer_agreement"] = agreement
+        if row["verdict"] == "pass" and agreement != "match":
+            row["verdict"] = "review"
+            row["reason"] += (" Independent answer unavailable."
+                              if agreement == "unknown" else
+                              " Independent answer differs from builder answer.")
     return review
 
 

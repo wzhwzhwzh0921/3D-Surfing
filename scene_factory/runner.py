@@ -19,7 +19,8 @@ from .openai_bridge import bridge
 from .question_types import QUESTION_TYPES, type_order
 from .schema import read_candidate_pool, read_plan, validate_selection
 from .suitability import screen
-from .supervisor import (checked_image_reads, evidence_hashes, extract_result, repair_prompt, review_outcome, review_prompt,
+from .supervisor import (checked_image_reads, evidence_hashes, extract_result, reconcile_independent_answers,
+                         repair_prompt, review_outcome, review_prompt,
                          validate_review)
 from .validate import validate
 
@@ -488,6 +489,22 @@ def supervisor_score(review: dict) -> int:
                for row in review["tiers"].values())
 
 
+def repair_change_summary(before: dict, after: dict) -> dict[str, list[str]]:
+    """Separate fixing a scene from replacing its question or only its answer."""
+    question_changes = []
+    answer_changes = []
+    for position, level in enumerate(("simple", "medium", "hard")):
+        old = before["variants"][position].get("question", {})
+        new = after["variants"][position].get("question", {})
+        if {k: v for k, v in old.items() if k != "declared_answer"} != {
+                k: v for k, v in new.items() if k != "declared_answer"}:
+            question_changes.append(level)
+        if old.get("declared_answer") != new.get("declared_answer"):
+            answer_changes.append(level)
+    return {"changed_question_levels": question_changes,
+            "changed_answer_levels": answer_changes}
+
+
 def clear_phase_artifacts(work: Path) -> None:
     for pattern in ("supervisor_round_*", "repair_round_*"):
         for path in work.glob(pattern):
@@ -533,7 +550,8 @@ def supervise_and_repair(work: Path, scene_id: str, state: dict, report: dict, *
                     provider=provider, key=key, model=supervisor_model or model,
                     upstream=upstream, timeout=timeout)
                 reads = checked_image_reads(stream, work)
-                review = validate_review(extract_result(stream))
+                review = reconcile_independent_answers(
+                    validate_review(extract_result(stream)), report)
             except Exception as exc:
                 if backup is not None:
                     try:
@@ -626,6 +644,7 @@ def supervise_and_repair(work: Path, scene_id: str, state: dict, report: dict, *
                 if hashlib.sha256((work / "source.glb").read_bytes()).hexdigest() != source_digest:
                     raise ValueError("Repair changed the original source GLB")
                 revised_plan = read_plan(work / "plan.json")
+                rounds[-1]["repair_changes"] = repair_change_summary(prior_plan, revised_plan)
                 for position, level in enumerate(("simple", "medium", "hard")):
                     if level in protected and revised_plan["variants"][position] != protected[level]:
                         raise ValueError(f"Repair changed supervisor-passing tier: {level}")

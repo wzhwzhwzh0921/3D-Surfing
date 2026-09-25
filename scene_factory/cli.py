@@ -68,8 +68,13 @@ def render_report(work: Path, output: Path) -> None:
                         f'{html.escape(str(tier_quality.get("reason", "")))}</p>')
         supervisor_tier = supervisor_review.get("tiers", {}).get(level)
         if supervisor_tier:
-            quality_note += (f'<p><b>独立监督：{html.escape(supervisor_tier["verdict"])}</b> '
+            version = html.escape(str(supervisor_review.get("schema_version", "unknown")))
+            quality_note += (f'<p><b>独立监督：{html.escape(supervisor_tier["verdict"])}'
+                             f'（{version}）</b> '
                              f'{html.escape(supervisor_tier["reason"])}</p>')
+            if "independent_answer" in supervisor_tier:
+                quality_note += (f'<p>独立答案：{html.escape(str(supervisor_tier["independent_answer"]))}'
+                                 f'；与生成器答案：{html.escape(str(supervisor_tier.get("answer_agreement", "unknown")))}</p>')
         cards.append(f'<article><h2>{html.escape(level)}</h2><model-viewer src="{html.escape(scene)}" camera-controls auto-rotate shadow-intensity="1" alt="{level} 3D scene"></model-viewer><img src="{html.escape(img)}" alt="起始视角">'
                      f'{extra_images}'
                      f'<p><b>题目：</b>{html.escape(r["question"])}</p>'

@@ -7,5 +7,6 @@
 - `sceneqa supervise --work .../nina_interior --repairs 0` 在调用模型前准确拒绝缺少三张 `answer_view.png` 的旧产物，避免用不完整证据作监督结论。
 - 将 Low Poly House 的现有 `plan.json`、源 GLB 与三份完整输出组合成只读审核试件后，`sceneqa supervise --repairs 0` 通过结构及 12 图准入检查，随后明确停在 `No tokenhub key`；这只证明已有产物的监督入口可到达模型调用前，不等于模型已经给出审核结果。
 - `report` 页面只显示与当前三份 GLB 及十二张证据图哈希一致的监督报告；旧尝试回滚或重渲染后不会误贴新版意见。
+- 后续把监督 schema 升为 `sceneqa_supervisor_v2`：提示词不给监督者生成器答案，要求先独立看图作答；程序对无法作答或答案不一致的 `pass` 降为 `review`。模拟测试覆盖了答案隔离、分歧降级和未知答案降级；尚未有真实模型的误收率数据。
 
 尚未验证：真实 DeepSeek/GLM 审核的准确率、模型是否总能按 JSON 约定输出、返修后视觉质量是否提高，以及 API 成本/缓存命中率。当前运行环境的 `sceneqa doctor` 显示 `api_key_configured: false`，因此没有将模拟测试描述成端到端模型测试。正式启用前先抽 20 个不同类型场景，按每档人工标注 `pass/review/fail`，报告逐题混淆矩阵、误收率、返修净提升、平均耗时与用量。
