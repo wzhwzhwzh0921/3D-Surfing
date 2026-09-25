@@ -5,9 +5,11 @@ import json
 import hashlib
 import os
 from pathlib import Path
+from copy import deepcopy
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -17,6 +19,8 @@ from .openai_bridge import bridge
 from .question_types import QUESTION_TYPES, type_order
 from .schema import read_candidate_pool, read_plan, validate_selection
 from .suitability import screen
+from .supervisor import (checked_image_reads, evidence_hashes, extract_result, repair_prompt, review_outcome, review_prompt,
+                         validate_review)
 from .validate import validate
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -36,6 +40,12 @@ AGENT_SYSTEM = (
     "output/validation.json, then revise plan.json. Never read package source code. "
     "Keep original geometry/materials. Answers come from your visual inspection, "
     "not from a registry answer calculator."
+)
+REVIEW_SYSTEM = "You are an independent visual supervisor. Read only the listed images and return strict JSON."
+REPAIR_SYSTEM = (
+    "You are a targeted scene-QA repair agent. Follow task.txt and the supplied "
+    "supervisor feedback. Preserve passing tiers, re-probe changed proposals, "
+    "rebuild, inspect every final image and report uncertainty honestly."
 )
 
 
@@ -61,6 +71,45 @@ def provider_key(provider: str, key_file: Path | None = None) -> str:
     return next((os.environ[name] for name in names if os.environ.get(name)), "")
 
 
+def run_model_phase(work: Path, *, prompt: str, system: str, tools: str,
+                    stream_path: Path, stderr_path: Path, usage_path: Path,
+                    provider: str, key: str, model: str, upstream: str,
+                    timeout: int) -> dict:
+    """Run one isolated Claude Code phase through the existing credential proxy."""
+    claude = shutil.which("claude")
+    if not claude:
+        raise RuntimeError("Claude Code CLI not found in PATH")
+    usage_path.unlink(missing_ok=True)
+    proxy_factory = bridge if provider == "tokenhub" else gateway
+    proxy_args = ({"endpoint": upstream} if provider == "tokenhub" else {"upstream": upstream})
+    with proxy_factory(**proxy_args, key=key, model=model, output=usage_path,
+                       max_tokens=65536, retry_delays=(20, 40, 60, 120), timeout=900) as proxy:
+        env = os.environ.copy()
+        for name in ("TOKENHUB_API_KEY", "TENCENT_ENDPOINT_API_KEY", "DEEPSEEK_API_KEY",
+                     "OPENAI_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"):
+            env.pop(name, None)
+        env.update({"ANTHROPIC_BASE_URL": proxy.url, "ANTHROPIC_API_KEY": proxy.token,
+                    "ANTHROPIC_AUTH_TOKEN": proxy.token, "ANTHROPIC_MODEL": model,
+                    "SCENEQA_BLENDER": blender_exe(),
+                    "PYTHONPATH": str(ROOT) + os.pathsep + env.get("PYTHONPATH", ""),
+                    "PIP_NO_CACHE_DIR": "1", "TMPDIR": str(work)})
+        command = [claude, "--bare", "--safe-mode", "--print", "--verbose",
+                   "--output-format", "stream-json",
+                   "--model", "sonnet" if provider == "tokenhub" else model,
+                   "--effort", "low", "--append-system-prompt", system,
+                   "--tools", tools, "--allowedTools", tools,
+                   "--permission-mode", "acceptEdits", "--strict-mcp-config",
+                   "--mcp-config", '{"mcpServers":{}}', "--setting-sources", "",
+                   "--no-session-persistence", "--disable-slash-commands", prompt]
+        with stream_path.open("w") as out, stderr_path.open("w") as err:
+            result = subprocess.run(command, cwd=work, env=env, stdout=out, stderr=err,
+                                    timeout=timeout)
+    usage = summarize_usage(usage_path)
+    if result.returncode:
+        raise RuntimeError(f"Claude {stream_path.name} failed with exit code {result.returncode}")
+    return usage
+
+
 def blender(mode: str, source: Path, output: Path, plan: Path | None = None, *, timeout=1800) -> None:
     command = [blender_exe(), "--background", "--threads", "2", "--python", str(WORKER),
                "--", mode, str(source), str(output)]
@@ -74,11 +123,16 @@ def blender(mode: str, source: Path, output: Path, plan: Path | None = None, *, 
         raise RuntimeError(f"Blender {mode} failed; inspect {log}")
 
 
-def prompt_for(scene_id: str, work: Path) -> str:
+def prompt_for(scene_id: str, work: Path, supervisor_rounds: int = 0) -> str:
     seed = int(os.environ.get("SCENEQA_QUESTION_SEED", "0"))
     order = type_order(scene_id, seed)
     menu = ", ".join(f"{kind} ({QUESTION_TYPES[kind]})" for kind in order)
-    return f"""You are preparing one 3D scene QA benchmark item in ONE session.
+    session_note = ("An independent read-only supervisor may review your finished images "
+                    "and request a later targeted repair session. Complete this first pass "
+                    "as fully as you can; do not defer known problems to the supervisor."
+                    if supervisor_rounds else
+                    "No second Claude session will be launched. Complete all revisions in this session.")
+    return f"""You are preparing one 3D scene QA benchmark item in one initial session.
 Scene ID: {scene_id}. Work directory: {work}.
 The source is {work / 'source.glb'}. Inventory: {work / 'inspect/inventory.json'}.
 Four color previews are in {work / 'inspect'}; use Read on the PNGs.
@@ -114,10 +168,10 @@ Set workflow_version=candidate_probe_v1. Preserve the selected candidate_id
 and all probed fields; only add its selected eligible start_camera and later
 correct declared_answer after visual review. Do not change placement, question
 or landmarks without probing again. The three chosen question types and answers
-must differ. This still uses ONE Claude Code session for the whole source.
+must differ. Finish all three tiers in this initial Claude Code session.
 Use {ROOT / 'examples/model_answer_fixture_plan.json'} only as a STRUCTURAL example; adapt every
 object name, location and question to this source. Read inventory and four previews.
-Do not call --help or inspect package source files, runner logs, task.txt, or status.json; the
+Do not call --help or inspect package source files, runner logs or status.json; the
 schema and supplied commands are the complete interface.
 Use the supplied rendered images for appearance; do not unpack GLB images or
 create texture-extraction scripts.
@@ -256,7 +310,7 @@ if an answer or question wording changes, then run verify. If the model cannot
 see the detail well enough, change the plan/placement and rebuild; do not guess.
 Iterate candidates/probe/plan/build/verify inside this same session until
 verify succeeds or you honestly reject the scene.
-No second Claude session will be launched. Finally write {work / 'agent_notes.md'}
+{session_note} Finally write {work / 'agent_notes.md'}
 with a brief per-tier audit: why the start cannot answer, which revealed view
 shows the answer, whether a duplicate or wording shortcut remains, and any
 uncertainty. Do not assert an untested 30-step claim.
@@ -360,10 +414,248 @@ def visual_quality_status(path: Path) -> tuple[str, dict | None]:
             "rejected": "visual_rejected"}[quality["status"]], quality
 
 
+def finalize_attempt(work: Path, stream_path: Path, scene_id: str, state: dict) -> tuple[dict, str, dict | None]:
+    """Independently rebuild and validate the artifacts left by an agent phase."""
+    plan_path = work / "plan.json"
+    plan = read_plan(plan_path)
+    pool = read_candidate_pool(work / "candidates.json")
+    probe_report = json.loads((work / "probe/probe_report.json").read_text())
+    probe_reads = observed_probe_reads(stream_path, work,
+                                       {c["candidate_id"] for c in pool["candidates"]})
+    state["candidate_preview_reads"] = probe_reads
+    if missing := {c["candidate_id"] for c in pool["candidates"]} - set(probe_reads):
+        raise ValueError(f"Agent did not inspect candidate previews: {sorted(missing)}")
+    validate_selection(plan, pool, probe_report)
+    if plan["schema_version"] == "1.3":
+        reads = observed_evidence_reads(stream_path, work)
+        state["visual_evidence_reads"] = reads
+        required = {f"{level}/{kind}.png" for level in ("simple", "medium", "hard")
+                    for kind in ("start", "reveal", "detail", "answer_view")}
+        if missing := required - set(reads):
+            raise ValueError(f"Agent did not inspect required answer views: {sorted(missing)}")
+    plan["scene_id"] = scene_id
+    plan["source"] = state["source"]
+    if plan["schema_version"] in ("1.2", "1.3"):
+        seed = int(os.environ.get("SCENEQA_QUESTION_SEED", "0"))
+        plan["type_selection"] = {"seed": seed,
+                                  "ordered_candidates": type_order(scene_id, seed),
+                                  "selected": [v["question"]["question_type"] for v in plan["variants"]]}
+    plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2))
+    output = work / "output"
+    blender("build", work / "source.glb", output, plan_path)
+    report = validate(plan_path, output)
+    quality_status, quality = visual_quality_status(work / "visual_quality.json")
+    state["visual_quality"] = quality
+    state["status"] = (quality_status if report["status"] == "candidate" and
+                       quality_status != "accepted" else report["status"])
+    return report, quality_status, quality
+
+
+BACKUP_ITEMS = ("source.glb", "task.txt", "inspect", "plan.json", "candidates.json",
+                "probe", "output", "visual_quality.json", "agent_notes.md")
+
+
+def snapshot_attempt(work: Path, backup: Path) -> None:
+    for name in BACKUP_ITEMS:
+        src = work / name
+        if not src.exists():
+            continue
+        dst = backup / name
+        if src.is_dir():
+            shutil.copytree(src, dst)
+        else:
+            shutil.copy2(src, dst)
+
+
+def restore_attempt(work: Path, backup: Path) -> None:
+    for name in BACKUP_ITEMS:
+        dst = work / name
+        if dst.is_symlink():
+            dst.unlink()
+        elif dst.is_dir():
+            shutil.rmtree(dst)
+        else:
+            dst.unlink(missing_ok=True)
+        src = backup / name
+        if src.is_dir():
+            shutil.copytree(src, dst)
+        elif src.exists():
+            shutil.copy2(src, dst)
+
+
+def supervisor_score(review: dict) -> int:
+    return sum({"pass": 2, "review": 1, "revise": 0}[row["verdict"]]
+               for row in review["tiers"].values())
+
+
+def clear_phase_artifacts(work: Path) -> None:
+    for pattern in ("supervisor_round_*", "repair_round_*"):
+        for path in work.glob(pattern):
+            if path.is_file():
+                path.unlink()
+
+
+def combined_usage(state: dict) -> dict:
+    phases = [state.get("usage")]
+    for row in (state.get("supervisor") or {}).get("rounds", []):
+        phases.extend((row.get("usage"), row.get("repair_usage")))
+    phases = [row for row in phases if isinstance(row, dict)]
+    fields = ("api_attempts", "completed_api_calls", "retryable_errors",
+              "input_tokens", "cached_tokens", "output_tokens", "usage_missing_calls")
+    total = {field: sum(row.get(field) or 0 for row in phases) for field in fields}
+    total["cache_hit_rate"] = (total["cached_tokens"] / total["input_tokens"]
+                               if total["input_tokens"] and not total["usage_missing_calls"]
+                               else None)
+    return total
+
+
+def supervise_and_repair(work: Path, scene_id: str, state: dict, report: dict, *,
+                         provider: str, key: str, model: str, upstream: str,
+                         timeout: int, max_repairs: int,
+                         supervisor_model: str | None = None) -> None:
+    """Challenge images in a separate context, then repair only concrete failures."""
+    rounds = []
+    state["supervisor"] = {"status": "running", "rounds": rounds,
+                           "max_repairs": max_repairs,
+                           "model": supervisor_model or model}
+    backup = None
+    preserve_backup = False
+    previous_review = None
+    previous_state = None
+    try:
+        for index in range(max_repairs + 1):
+            stream = work / f"supervisor_round_{index}.jsonl"
+            try:
+                usage = run_model_phase(
+                    work, prompt=review_prompt(work, report), system=REVIEW_SYSTEM, tools="Read",
+                    stream_path=stream, stderr_path=work / f"supervisor_round_{index}.stderr.log",
+                    usage_path=work / f"supervisor_round_{index}.usage.jsonl",
+                    provider=provider, key=key, model=supervisor_model or model,
+                    upstream=upstream, timeout=timeout)
+                reads = checked_image_reads(stream, work)
+                review = validate_review(extract_result(stream))
+            except Exception as exc:
+                if backup is not None:
+                    try:
+                        restore_attempt(work, backup)
+                        state.update(previous_state)
+                    except Exception as restore_exc:
+                        preserve_backup = True
+                        state["status"] = "failed"
+                        state["supervisor"] = {"status": "rollback_failed", "rounds": rounds,
+                                               "backup": str(backup),
+                                               "error": f"{type(restore_exc).__name__}: {restore_exc}"}
+                        return
+                state["status"] = "supervisor_needs_review"
+                state["supervisor"] = {"status": "invalid_review", "rounds": rounds,
+                                       "error": f"{type(exc).__name__}: {exc}"}
+                return
+            review["artifact_sha256"] = {r["level"]: r.get("sha256")
+                                         for r in report["results"]}
+            review["evidence_sha256"] = evidence_hashes(work)
+            (work / f"supervisor_round_{index}.json").write_text(
+                json.dumps(review, ensure_ascii=False, indent=2))
+            rounds.append({"round": index, "outcome": review_outcome(review),
+                           "report": str(work / f"supervisor_round_{index}.json"),
+                           "image_reads": reads, "usage": usage})
+            if backup is not None:
+                pass_regressed = any(
+                    previous_review["tiers"][level]["verdict"] == "pass" and
+                    review["tiers"][level]["verdict"] != "pass"
+                    for level in ("simple", "medium", "hard"))
+                if pass_regressed or supervisor_score(review) <= supervisor_score(previous_review):
+                    try:
+                        restore_attempt(work, backup)
+                        state.update(previous_state)
+                    except Exception as exc:
+                        preserve_backup = True
+                        state["status"] = "failed"
+                        state["supervisor"] = {"status": "rollback_failed", "rounds": rounds,
+                                               "backup": str(backup),
+                                               "error": f"{type(exc).__name__}: {exc}"}
+                        return
+                    state["status"] = "supervisor_rejected"
+                    state["supervisor"] = {"status": "repair_did_not_improve", "rounds": rounds}
+                    return
+                shutil.rmtree(backup)
+                backup = None
+            outcome = review_outcome(review)
+            if outcome == "pass":
+                state["supervisor"]["status"] = "passed"
+                if state["status"] != "candidate":
+                    state["status"] = "supervisor_needs_review"
+                return
+            if outcome == "review":
+                state["status"] = "supervisor_needs_review"
+                state["supervisor"]["status"] = "needs_review"
+                return
+            if index == max_repairs:
+                state["status"] = "supervisor_rejected"
+                state["supervisor"]["status"] = "repair_limit_reached"
+                return
+            previous_review = review
+            previous_state = deepcopy(state)
+            source_digest = hashlib.sha256((work / "source.glb").read_bytes()).hexdigest()
+            prior_plan = read_plan(work / "plan.json")
+            protected = {level: prior_plan["variants"][index]
+                         for index, level in enumerate(("simple", "medium", "hard"))
+                         if review["tiers"][level]["verdict"] == "pass"}
+            if any((work / name).is_symlink() for name in BACKUP_ITEMS):
+                state["status"] = "supervisor_needs_review"
+                state["supervisor"] = {"status": "repair_requires_regular_files", "rounds": rounds}
+                return
+            backup = Path(tempfile.mkdtemp(prefix=".supervisor_backup_", dir=work))
+            try:
+                snapshot_attempt(work, backup)
+            except Exception as exc:
+                state["status"] = "supervisor_needs_review"
+                state["supervisor"] = {"status": "backup_failed", "rounds": rounds,
+                                       "error": f"{type(exc).__name__}: {exc}"}
+                return
+            try:
+                repair_stream = work / f"repair_round_{index + 1}.jsonl"
+                repair_usage = run_model_phase(
+                    work, prompt=repair_prompt(work, review, index + 1),
+                    system=REPAIR_SYSTEM, tools="Bash,Read,Write,Edit,Glob,Grep",
+                    stream_path=repair_stream,
+                    stderr_path=work / f"repair_round_{index + 1}.stderr.log",
+                    usage_path=work / f"repair_round_{index + 1}.usage.jsonl",
+                    provider=provider, key=key, model=model, upstream=upstream, timeout=timeout)
+                rounds[-1]["repair_usage"] = repair_usage
+                report, _, _ = finalize_attempt(work, repair_stream, scene_id, state)
+                if hashlib.sha256((work / "source.glb").read_bytes()).hexdigest() != source_digest:
+                    raise ValueError("Repair changed the original source GLB")
+                revised_plan = read_plan(work / "plan.json")
+                for position, level in enumerate(("simple", "medium", "hard")):
+                    if level in protected and revised_plan["variants"][position] != protected[level]:
+                        raise ValueError(f"Repair changed supervisor-passing tier: {level}")
+            except Exception as exc:
+                try:
+                    restore_attempt(work, backup)
+                    state.update(previous_state)
+                except Exception as restore_exc:
+                    preserve_backup = True
+                    state["status"] = "failed"
+                    state["supervisor"] = {"status": "rollback_failed", "rounds": rounds,
+                                           "backup": str(backup),
+                                           "error": f"{type(restore_exc).__name__}: {restore_exc}"}
+                    return
+                state["status"] = "supervisor_rejected"
+                state["supervisor"] = {"status": "repair_invalid", "rounds": rounds,
+                                       "error": f"{type(exc).__name__}: {exc}"}
+                return
+    finally:
+        if backup is not None and not preserve_backup:
+            shutil.rmtree(backup, ignore_errors=True)
+
+
 def run_one(row: dict, output_root: Path, *, source_path: Path | None = None,
             upstream: str | None = None, model: str | None = None, provider: str = "tokenhub",
             key_file: Path | None = None, preflight: bool = True,
-            max_bytes=100_000_000, timeout=7200, force=False, dry_run=False) -> dict:
+            max_bytes=100_000_000, timeout=7200, force=False, dry_run=False,
+            supervisor_rounds=0, supervisor_model: str | None = None) -> dict:
+    if not 0 <= supervisor_rounds <= 2:
+        raise ValueError("supervisor_rounds must be 0..2")
     scene_id = row.get("uid") or "adhoc"
     work = (output_root / scene_id).resolve()
     output = work / "output"
@@ -372,6 +664,7 @@ def run_one(row: dict, output_root: Path, *, source_path: Path | None = None,
     if status_file.exists() and not force:
         old_status = json.loads(status_file.read_text())
         if old_status.get("status") in ("unsuitable", "visual_rejected", "visual_needs_review",
+                                        "supervisor_rejected", "supervisor_needs_review",
                                         "candidate", "needs_review"):
             return {"scene_id": scene_id, "status": old_status["status"], "skipped": True,
                     "work": str(work), "visual_quality": old_status.get("visual_quality")}
@@ -381,6 +674,7 @@ def run_one(row: dict, output_root: Path, *, source_path: Path | None = None,
             return {"scene_id": scene_id, "status": old["status"], "skipped": True,
                     "work": str(work)}
     work.mkdir(parents=True, exist_ok=True)
+    clear_phase_artifacts(work)
     (work / "unsuitable.json").unlink(missing_ok=True)
     (work / "visual_quality.json").unlink(missing_ok=True)
     state = {"scene_id": scene_id, "status": "running", "started": time.time(),
@@ -398,7 +692,7 @@ def run_one(row: dict, output_root: Path, *, source_path: Path | None = None,
         inspect = work / "inspect"
         if not (inspect / "inventory.json").exists():
             blender("inspect", source, inspect)
-        prompt = prompt_for(scene_id, work)
+        prompt = prompt_for(scene_id, work, supervisor_rounds)
         (work / "task.txt").write_text(prompt)
         if dry_run:
             state["status"] = "prepared"
@@ -419,48 +713,19 @@ def run_one(row: dict, output_root: Path, *, source_path: Path | None = None,
         key = provider_key(provider, key_file)
         if not key:
             raise RuntimeError(f"No {provider} key: set the matching environment variable or --key-file")
-        claude = shutil.which("claude")
-        if not claude:
-            raise RuntimeError("Claude Code CLI not found in PATH")
         model = model or os.environ.get("SCENEQA_MODEL") or (
             "deepseek/deepseek-flash" if provider == "tokenhub" else "deepseek-flash")
         upstream = upstream or os.environ.get("SCENEQA_UPSTREAM") or (
             "https://tokenhub.tencentmaas.com/v1/chat/completions" if provider == "tokenhub"
             else "https://api.deepseek.com/anthropic")
         usage_log = work / "api_usage.jsonl"
-        if usage_log.exists():
-            usage_log.unlink()
         api_started = True
-        proxy_factory = bridge if provider == "tokenhub" else gateway
-        proxy_args = ({"endpoint": upstream} if provider == "tokenhub" else {"upstream": upstream})
-        with proxy_factory(**proxy_args, key=key, model=model, output=usage_log,
-                           max_tokens=65536, retry_delays=(20, 40, 60, 120), timeout=900) as proxy:
-            env = os.environ.copy()
-            # The model receives Bash. Only the opaque loopback proxy token may
-            # enter that process; never expose the real upstream credential.
-            for name in ("TOKENHUB_API_KEY", "TENCENT_ENDPOINT_API_KEY", "DEEPSEEK_API_KEY",
-                         "OPENAI_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"):
-                env.pop(name, None)
-            env.update({"ANTHROPIC_BASE_URL": proxy.url, "ANTHROPIC_API_KEY": proxy.token,
-                        "ANTHROPIC_AUTH_TOKEN": proxy.token, "ANTHROPIC_MODEL": model,
-                        "SCENEQA_BLENDER": blender_exe(),
-                        "PYTHONPATH": str(ROOT) + os.pathsep + env.get("PYTHONPATH", ""),
-                        "PIP_NO_CACHE_DIR": "1", "TMPDIR": str(work)})
-            command = [claude, "--bare", "--safe-mode", "--print", "--verbose",
-                       "--output-format", "stream-json", "--model", "sonnet" if provider == "tokenhub" else model,
-                       "--effort", "low", "--append-system-prompt", AGENT_SYSTEM,
-                       "--tools", "Bash,Read,Write,Edit,Glob,Grep",
-                       "--allowedTools", "Bash,Read,Write,Edit,Glob,Grep",
-                       "--permission-mode", "acceptEdits", "--strict-mcp-config",
-                       "--mcp-config", '{"mcpServers":{}}', "--setting-sources", "",
-                       "--no-session-persistence", "--disable-slash-commands", prompt]
-            with (work / "claude_stream.jsonl").open("w") as out, (work / "claude_stderr.log").open("w") as err:
-                result = subprocess.run(command, cwd=work, env=env, stdout=out, stderr=err,
-                                        timeout=timeout)
-            state["claude_exit_code"] = result.returncode
-            state["usage"] = summarize_usage(usage_log)
-            if result.returncode:
-                raise RuntimeError(f"Claude session failed with exit code {result.returncode}")
+        state["usage"] = run_model_phase(
+            work, prompt=prompt, system=AGENT_SYSTEM, tools="Bash,Read,Write,Edit,Glob,Grep",
+            stream_path=work / "claude_stream.jsonl", stderr_path=work / "claude_stderr.log",
+            usage_path=usage_log, provider=provider, key=key, model=model,
+            upstream=upstream, timeout=timeout)
+        state["claude_exit_code"] = 0
         unsuitable_path = work / "unsuitable.json"
         if unsuitable_path.exists():
             if (work / "visual_quality.json").exists():
@@ -472,38 +737,14 @@ def run_one(row: dict, output_root: Path, *, source_path: Path | None = None,
             state["unsuitable"] = unsuitable
             state["completed"] = time.time()
             return state
-        plan_path = work / "plan.json"
-        plan = read_plan(plan_path)
-        pool = read_candidate_pool(work / "candidates.json")
-        probe_report = json.loads((work / "probe/probe_report.json").read_text())
-        probe_reads = observed_probe_reads(work / "claude_stream.jsonl", work,
-                                           {c["candidate_id"] for c in pool["candidates"]})
-        state["candidate_preview_reads"] = probe_reads
-        if missing := {c["candidate_id"] for c in pool["candidates"]} - set(probe_reads):
-            raise ValueError(f"Agent did not inspect candidate previews: {sorted(missing)}")
-        validate_selection(plan, pool, probe_report)
-        if plan["schema_version"] == "1.3":
-            reads = observed_evidence_reads(work / "claude_stream.jsonl", work)
-            state["visual_evidence_reads"] = reads
-            required = {f"{level}/{kind}.png" for level in ("simple", "medium", "hard")
-                        for kind in ("start", "reveal", "detail", "answer_view")}
-            if missing := required - set(reads):
-                raise ValueError(f"Agent did not inspect required answer views: {sorted(missing)}")
-        plan["scene_id"] = scene_id
-        plan["source"] = state["source"]
-        if plan["schema_version"] in ("1.2", "1.3"):
-            seed = int(os.environ.get("SCENEQA_QUESTION_SEED", "0"))
-            plan["type_selection"] = {"seed": seed,
-                                      "ordered_candidates": type_order(scene_id, seed),
-                                      "selected": [v["question"]["question_type"] for v in plan["variants"]]}
-        plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2))
-        # Build/verify once more outside the agent session so agent claims are not trusted.
-        blender("build", source, output, plan_path)
-        report = validate(plan_path, output)
-        quality_status, quality = visual_quality_status(work / "visual_quality.json")
-        state["visual_quality"] = quality
-        state["status"] = (quality_status if report["status"] == "candidate" and
-                           quality_status != "accepted" else report["status"])
+        report, quality_status, quality = finalize_attempt(
+            work, work / "claude_stream.jsonl", scene_id, state)
+        if supervisor_rounds and report["status"] == "candidate":
+            supervise_and_repair(work, scene_id, state, report, provider=provider,
+                                 key=key, model=model, upstream=upstream,
+                                 timeout=timeout, max_repairs=supervisor_rounds,
+                                 supervisor_model=supervisor_model)
+        state["total_usage"] = combined_usage(state)
         state["completed"] = time.time()
     except subprocess.TimeoutExpired:
         state["status"] = "failed"
@@ -530,3 +771,53 @@ def run_batch(rows: list[dict], output_root: Path, *, workers=1, **kwargs) -> li
         for future in as_completed(futures):
             results.append(future.result())
     return results
+
+
+def supervise_existing(work: Path, *, provider="tokenhub", key_file: Path | None = None,
+                       model: str | None = None, supervisor_model: str | None = None,
+                       upstream: str | None = None, max_repairs=0, timeout=7200) -> dict:
+    """Review a built run without paying to regenerate it first."""
+    if not 0 <= max_repairs <= 2:
+        raise ValueError("max_repairs must be 0..2")
+    work = work.resolve()
+    plan = read_plan(work / "plan.json")
+    report = validate(work / "plan.json", work / "output")
+    if report["status"] != "candidate":
+        raise ValueError("Only structurally valid candidate scenes can be supervised")
+    missing = [f"{level}/{view}.png" for level in ("simple", "medium", "hard")
+               for view in ("start", "reveal", "detail", "answer_view")
+               if not (work / "output" / level / f"{view}.png").is_file()]
+    if missing:
+        raise ValueError(f"Supervisor needs all twelve rendered images: {missing}")
+    if max_repairs:
+        if any((work / name).is_symlink() for name in BACKUP_ITEMS):
+            raise ValueError("Automatic repair requires regular work files, not symlinks")
+        pool = read_candidate_pool(work / "candidates.json")
+        probe_report = json.loads((work / "probe/probe_report.json").read_text())
+        validate_selection(plan, pool, probe_report)
+    key = provider_key(provider, key_file)
+    if not key:
+        raise RuntimeError(f"No {provider} key: set the matching environment variable or --key-file")
+    model = model or os.environ.get("SCENEQA_MODEL") or (
+        "deepseek/deepseek-flash" if provider == "tokenhub" else "deepseek-flash")
+    upstream = upstream or os.environ.get("SCENEQA_UPSTREAM") or (
+        "https://tokenhub.tencentmaas.com/v1/chat/completions" if provider == "tokenhub"
+        else "https://api.deepseek.com/anthropic")
+    status_path = work / "status.json"
+    state = json.loads(status_path.read_text()) if status_path.exists() else {
+        "scene_id": plan.get("scene_id"), "source": plan.get("source", {})}
+    state.setdefault("source", plan.get("source", {}))
+    quality_status, quality = visual_quality_status(work / "visual_quality.json")
+    state["visual_quality"] = quality
+    state["status"] = quality_status if quality_status != "accepted" else "candidate"
+    try:
+        clear_phase_artifacts(work)
+        supervise_and_repair(work, state.get("scene_id") or plan.get("scene_id") or work.name,
+                             state, report, provider=provider, key=key, model=model,
+                             supervisor_model=supervisor_model, upstream=upstream,
+                             timeout=timeout, max_repairs=max_repairs)
+        state["total_usage"] = combined_usage(state)
+        state["completed"] = time.time()
+    finally:
+        status_path.write_text(json.dumps(state, ensure_ascii=False, indent=2))
+    return state

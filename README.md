@@ -1,6 +1,6 @@
 # Scene QA Factory / 3D 场景探索问答生成
 
-给定一个可下载的 `.glb` URL，本仓库用**一次 Claude Code + DeepSeek Flash 会话**规划同一原场景的三次独立增强，并交付三套 `(scene.glb, question, model_answer, starting camera)`。题型与难度正交：定义 **10 类题 × 3 档难度**，单场景仍只出简单、中等、困难各一题。题型顺序由场景 ID 和种子可复现地随机产生，模型从可行题型里选三种。简单题起始证据不可见；中等题有近处明显遮挡；困难题先按线索找对地标，再绕开局部遮挡。具体 30 个组合见 [题型矩阵](docs/QUESTION_TYPES.md)。
+给定一个可下载的 `.glb` URL，本仓库默认用**一次 Claude Code + DeepSeek Flash 会话**规划同一原场景的三次独立增强，并交付三套 `(scene.glb, question, model_answer, starting camera)`。题型与难度正交：定义 **10 类题 × 3 档难度**，单场景仍只出简单、中等、困难各一题。题型顺序由场景 ID 和种子可复现地随机产生，模型从可行题型里选三种。简单题起始证据不可见；中等题有近处明显遮挡；困难题先按线索找对地标，再绕开局部遮挡。具体 30 个组合见 [题型矩阵](docs/QUESTION_TYPES.md)。
 
 新流程在这一次会话内先提出**每档两道候选题**，用轻量的 `probe` 扫描起始机位：地标必须能看见且足够大、目标答案须隐藏、中难档的真实第一遮挡物须符合要求。模型查看六道候选的截图后，每档选一道正式构建。最终另有按题型共同取景的 `answer_view.png`，帮助数数量或判断方位。协议见[候选题与机位探测](docs/CANDIDATE_PROBE.md)。
 
@@ -21,7 +21,7 @@ set -a; source .env; set +a
 .venv/bin/sceneqa doctor
 ```
 
-默认使用测试过的 TokenHub `https://tokenhub.tencentmaas.com/v1/chat/completions` 和 `deepseek/deepseek-flash`。仓库自带本地协议桥，把 Claude Code 的 Anthropic Messages 请求转成 TokenHub 的 OpenAI Chat Completions 请求，包含图片、工具调用、流式响应和缓存统计。也可使用官方 DeepSeek：`--provider deepseek`，并设置 `DEEPSEEK_API_KEY`；其 Anthropic 兼容根地址为 `https://api.deepseek.com/anthropic`，模型名为 `deepseek-flash`。两个网关均对 429/5xx 重试，单次响应输出上限设为 65,536 tokens，未设置轮次限制。网关的 cache 命中率依据上游 usage 字段计算；若上游未返回缓存字段，报告为未知。真实上游 key 只保留在本地网关进程，不传给可执行 Bash 的 Claude Code 子进程。单场景最多一个 Claude Code 会话；即便它的结果不通过最终验收，也只记录失败供续跑或人工处理。
+默认使用测试过的 TokenHub `https://tokenhub.tencentmaas.com/v1/chat/completions` 和 `deepseek/deepseek-flash`。仓库自带本地协议桥，把 Claude Code 的 Anthropic Messages 请求转成 TokenHub 的 OpenAI Chat Completions 请求，包含图片、工具调用、流式响应和缓存统计。也可使用官方 DeepSeek：`--provider deepseek`，并设置 `DEEPSEEK_API_KEY`；其 Anthropic 兼容根地址为 `https://api.deepseek.com/anthropic`，模型名为 `deepseek-flash`。两个网关均对 429/5xx 重试，单次响应输出上限设为 65,536 tokens，未设置轮次限制。网关的 cache 命中率依据上游 usage 字段计算；若上游未返回缓存字段，报告为未知。真实上游 key 只保留在本地网关进程，不传给可执行 Bash 的 Claude Code 子进程。默认每个场景只运行一次生成会话；开启可选监督循环时，还会增加独立审核和最多两轮定点返修会话。失败及返修日志均保留供续跑或人工处理。
 
 ## 单条与批量运行
 
@@ -38,7 +38,7 @@ sceneqa select --candidates /data/candidates.json --probe-report /data/probe/pro
 
 `.env` 不会自动加载，必须先 `source`；若 key 存在私有文件中，可用 `--key-file /private/path/key.txt`，支持纯 key 文件或包含 `TOKENHUB_API_KEY=` / `TENCENT_ENDPOINT_API_KEY=` 的 `.env`。不要把私有文件放进本仓库。
 
-`run` 支持 `--input-path` 本地 GLB 和 `--dry-run`，后者只做源资产预检和四张彩色预览，不调用模型。设置 `SCENEQA_QUESTION_SEED` 可改变可复现的题型顺序；模型可跳过不适合当前场景的题型，并在 `agent_notes.md` 说明原因。`batch` 默认一个 worker，最多四个，并按 `uid` 续跑：已有 `candidate`、`needs_review`、`visual_needs_review` 或 `visual_rejected` 结果会跳过；失败项保留 `status.json`、日志和中间产物。源下载有大小上限（默认 100 MB）、SHA256、GLB v2 头检查、断点式缓存与 429/5xx 重试。批量运行可用 `--max-bytes` 调整上限。
+`run` 支持 `--input-path` 本地 GLB 和 `--dry-run`，后者只做源资产预检和四张彩色预览，不调用模型。设置 `SCENEQA_QUESTION_SEED` 可改变可复现的题型顺序；模型可跳过不适合当前场景的题型，并在 `agent_notes.md` 说明原因。`batch` 默认一个 worker，最多四个，并按 `uid` 续跑：已有 `candidate`、`needs_review`、`visual_needs_review`、`visual_rejected`、`supervisor_needs_review` 或 `supervisor_rejected` 结果会跳过；失败项保留 `status.json`、日志和中间产物。源下载有大小上限（默认 100 MB）、SHA256、GLB v2 头检查、断点式缓存与 429/5xx 重试。批量运行可用 `--max-bytes` 调整上限。
 
 若原场景缺少至少两类可自然重复的小物件，或缺少困难题所需的两个可区分地标，agent 应生成 `unsuitable.json` 记录原因，批量结果标为 `unsuitable`，而不是复制房屋、横梁或地面凑题。目录筛选的“可下载、场景复杂度合适”不等同于“适合三道探索题”；这一判断也是正式入库前的人工复核项。
 
@@ -87,6 +87,8 @@ cd /data/sceneqa-runs/<uid> && python3 -m http.server 8000
 三档最低解题过程、轻度遮挡的准入条件以及 `pass/review/fail` 的具体边界见[难度与视觉审核协议](docs/REVIEW_POLICY.md)。
 
 `batch` 摘要同时统计场景状态和 `tier_pass/tier_review/tier_fail`，便于看到一组场景被拒绝时仍有多少单题可用；`report` 页面逐题显示自评状态与原因。
+
+可选的[独立监督与定点返修循环](docs/SUPERVISOR_LOOP.md)让只读图像的第二次模型调用逐题找缺陷，最多再做两轮定点返修与复审。默认关闭；运行前应在小规模人工审核样本上验证其误收率与成本。
 
 若改用 Codex Sol 逐场景手工调用，使用[单场景任务模板](docs/CODEX_SOL_TASK.md)，每次替换源 GLB、工作目录和仓库路径；该模板包含相同的反捷径与视觉复核要求。
 

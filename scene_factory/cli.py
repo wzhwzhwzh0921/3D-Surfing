@@ -11,10 +11,11 @@ import shutil
 import sys
 
 from .download import glb_header
-from .runner import ROOT, blender, run_batch, run_one
+from .runner import ROOT, blender, run_batch, run_one, supervise_existing
 from .question_types import QUESTION_TYPES, type_order
 from .suitability import screen
 from .schema import read_candidate_pool, read_plan, select_candidates
+from .supervisor import evidence_hashes
 from .validate import validate
 
 
@@ -27,7 +28,27 @@ def render_report(work: Path, output: Path) -> None:
     quality_path = work / "visual_quality.json"
     visual_quality = json.loads(quality_path.read_text()) if quality_path.exists() else {}
     visual_status = visual_quality.get("status", "needs_review")
+    status_path = work / "status.json"
+    delivery_status = (json.loads(status_path.read_text()).get("status")
+                       if status_path.exists() else
+                       {"rejected": "visual_rejected", "needs_review": "visual_needs_review"}.get(
+                           visual_status, validation["status"]))
     quality_tiers = visual_quality.get("tiers", {})
+    current_hashes = {row["level"]: row["sha256"] for row in validation["results"]}
+    supervisor_review = {}
+    current_evidence = None
+    for path in sorted(work.glob("supervisor_round_*.json"), reverse=True):
+        candidate = json.loads(path.read_text())
+        if candidate.get("artifact_sha256") != current_hashes:
+            continue
+        if current_evidence is None:
+            try:
+                current_evidence = evidence_hashes(work)
+            except FileNotFoundError:
+                break
+        if candidate.get("evidence_sha256") == current_evidence:
+            supervisor_review = candidate
+            break
     captions = {"reveal": "全景揭示视角", "detail": "单目标局部视角",
                 "answer_view": "按题型生成的同框证据"}
     cards = []
@@ -43,6 +64,10 @@ def render_report(work: Path, output: Path) -> None:
         tier_quality = quality_tiers.get(level, {})
         quality_note = (f'<p><b>视觉自评：{html.escape(str(tier_quality.get("status", "未审核")))}</b> '
                         f'{html.escape(str(tier_quality.get("reason", "")))}</p>')
+        supervisor_tier = supervisor_review.get("tiers", {}).get(level)
+        if supervisor_tier:
+            quality_note += (f'<p><b>独立监督：{html.escape(supervisor_tier["verdict"])}</b> '
+                             f'{html.escape(supervisor_tier["reason"])}</p>')
         cards.append(f'<article><h2>{html.escape(level)}</h2><model-viewer src="{html.escape(scene)}" camera-controls auto-rotate shadow-intensity="1" alt="{level} 3D scene"></model-viewer><img src="{html.escape(img)}" alt="起始视角">'
                      f'{extra_images}'
                      f'<p><b>题目：</b>{html.escape(r["question"])}</p>'
@@ -54,7 +79,7 @@ def render_report(work: Path, output: Path) -> None:
     page = """<!doctype html><html lang="zh"><meta charset="utf-8"><title>Scene QA</title>
 <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
 <style>body{font:16px system-ui;max-width:1200px;margin:30px auto;background:#eef1f5;color:#16212c}main{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:16px}article{background:white;padding:18px;border-radius:12px;box-shadow:0 2px 12px #0001}img,model-viewer{display:block;width:100%;aspect-ratio:1;object-fit:contain;background:#ddd}img{aspect-ratio:16/9}</style>
-<h1>场景增强审查页</h1><p>结构状态：""" + html.escape(validation["status"]) + """；模型视觉自评：""" + html.escape(str(visual_status)) + """。标记「模型观察答案」的题由模型看图作答，程序不核对答案；自然性与实际操作数仍需人工/盲测复核。</p><main>""" + "\n".join(cards) + "</main></html>"
+<h1>场景增强审查页</h1><p>交付状态：""" + html.escape(str(delivery_status)) + """；结构状态：""" + html.escape(validation["status"]) + """；模型视觉自评：""" + html.escape(str(visual_status)) + """。标记「模型观察答案」的题由模型看图作答，程序不核对答案；独立监督也不是人工 gold，实际操作数仍需盲测。</p><main>""" + "\n".join(cards) + "</main></html>"
     output.write_text(page)
 
 
@@ -105,6 +130,9 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--provider", choices=["tokenhub", "deepseek"], default="tokenhub")
     run.add_argument("--key-file", type=Path)
     run.add_argument("--force", action="store_true")
+    run.add_argument("--supervisor-rounds", type=int, choices=(0, 1, 2), default=0,
+                     help="Independent image review plus up to N targeted repairs (default: off)")
+    run.add_argument("--supervisor-model", help="Optional different judge model on the same provider")
     run.add_argument("--dry-run", action="store_true")
     run.add_argument("--no-preflight", action="store_true")
     batch = sub.add_parser("batch")
@@ -122,6 +150,17 @@ def parser() -> argparse.ArgumentParser:
     batch.add_argument("--key-file", type=Path)
     batch.add_argument("--upstream")
     batch.add_argument("--model")
+    batch.add_argument("--supervisor-rounds", type=int, choices=(0, 1, 2), default=0)
+    batch.add_argument("--supervisor-model")
+    supervisor = sub.add_parser("supervise", help="Review an existing built run; optionally repair it")
+    supervisor.add_argument("--work", type=Path, required=True)
+    supervisor.add_argument("--repairs", type=int, choices=(0, 1, 2), default=0)
+    supervisor.add_argument("--provider", choices=("tokenhub", "deepseek"), default="tokenhub")
+    supervisor.add_argument("--key-file", type=Path)
+    supervisor.add_argument("--upstream")
+    supervisor.add_argument("--model")
+    supervisor.add_argument("--supervisor-model")
+    supervisor.add_argument("--timeout", type=int, default=7200)
     gallery = sub.add_parser("report")
     gallery.add_argument("--work", type=Path, required=True)
     gallery.add_argument("--output", type=Path, required=True)
@@ -193,7 +232,9 @@ def main() -> None:
             result = run_one(row, a.output_root, source_path=a.input_path, upstream=a.upstream,
                              model=a.model, provider=a.provider, key_file=a.key_file,
                              max_bytes=a.max_bytes, timeout=a.timeout,
-                             force=a.force, dry_run=a.dry_run, preflight=not a.no_preflight)
+                             force=a.force, dry_run=a.dry_run, preflight=not a.no_preflight,
+                             supervisor_rounds=a.supervisor_rounds,
+                             supervisor_model=a.supervisor_model)
             print(json.dumps(result, ensure_ascii=False, indent=2))
             if result["status"] == "failed":
                 sys.exit(1)
@@ -205,13 +246,17 @@ def main() -> None:
             result = run_batch(rows, a.output_root, workers=a.workers, max_bytes=a.max_bytes,
                                timeout=a.timeout, dry_run=a.dry_run, provider=a.provider,
                                key_file=a.key_file, upstream=a.upstream, model=a.model,
-                               preflight=not a.no_preflight)
+                               preflight=not a.no_preflight,
+                               supervisor_rounds=a.supervisor_rounds,
+                               supervisor_model=a.supervisor_model)
             tier_statuses = [tier.get("status") for item in result
                              for tier in ((item.get("visual_quality") or {}).get("tiers") or {}).values()]
             print(json.dumps({"total": len(result), "candidate": sum(x["status"] == "candidate" for x in result),
                               "needs_review": sum(x["status"] == "needs_review" for x in result),
                               "visual_needs_review": sum(x["status"] == "visual_needs_review" for x in result),
                               "visual_rejected": sum(x["status"] == "visual_rejected" for x in result),
+                              "supervisor_needs_review": sum(x["status"] == "supervisor_needs_review" for x in result),
+                              "supervisor_rejected": sum(x["status"] == "supervisor_rejected" for x in result),
                               "tier_pass": tier_statuses.count("pass"),
                               "tier_review": tier_statuses.count("review"),
                               "tier_fail": tier_statuses.count("fail"),
@@ -219,6 +264,14 @@ def main() -> None:
                               "failed": sum(x["status"] == "failed" for x in result),
                               "results": result}, ensure_ascii=False, indent=2))
             if any(x["status"] == "failed" for x in result):
+                sys.exit(1)
+        elif a.command == "supervise":
+            result = supervise_existing(a.work, provider=a.provider, key_file=a.key_file,
+                                        model=a.model, supervisor_model=a.supervisor_model,
+                                        upstream=a.upstream, max_repairs=a.repairs,
+                                        timeout=a.timeout)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            if result["status"] == "failed":
                 sys.exit(1)
         elif a.command == "report":
             render_report(a.work, a.output)
