@@ -12,6 +12,7 @@ from scene_factory.runner import (combined_usage, repair_change_summary, run_mod
                                   supervise_and_repair, supervisor_verdict_changes)
 from scene_factory.supervisor import (LEVELS, VIEWS, checked_image_reads,
                                       evidence_hashes, extract_result, reconcile_independent_answers,
+                                      review_item_hashes,
                                       review_outcome, review_prompt, validate_review)
 
 
@@ -134,10 +135,13 @@ class SupervisorTests(unittest.TestCase):
                                {"question": {"text": "What color?", "declared_answer": "red"}},
                                {"question": {"text": "Where?", "declared_answer": "left"}}]}
         after = {"variants": [{"question": {"text": "How many?", "declared_answer": 3}},
-                              {"question": {"text": "What color?", "declared_answer": "red"}},
+                              {"question": {"text": "What color?", "declared_answer": "red"},
+                               "start_camera": {"azimuth_deg": 90}, "copies": [{"xy": [1, 2]}]},
                               {"question": {"text": "Which object?", "declared_answer": "left"}}]}
         self.assertEqual(repair_change_summary(before, after),
-                         {"changed_question_levels": ["hard"], "changed_answer_levels": ["simple"]})
+                         {"changed_question_levels": ["hard"], "changed_answer_levels": ["simple"],
+                          "changed_camera_levels": ["medium"], "changed_placement_levels": ["medium"],
+                          "changed_evidence_design_levels": []})
 
     def test_repair_rechecks_and_keeps_improvement(self):
         reports = [verdicts(medium="revise"), verdicts()]
@@ -293,11 +297,12 @@ class SupervisorTests(unittest.TestCase):
                          "answer": {"value": level, "source": "model_visual"},
                          "hidden_copy_ids_at_start": [],
                          "all_copies_discoverable": True})
-        (self.work / "output/validation.json").write_text(
-            json.dumps({"status": "candidate", "results": rows}))
+        validation = {"status": "candidate", "results": rows}
+        (self.work / "output/validation.json").write_text(json.dumps(validation))
         report = verdicts(medium="revise")
         report["artifact_sha256"] = {row["level"]: row["sha256"] for row in rows}
         report["evidence_sha256"] = evidence_hashes(self.work)
+        report["review_item_sha256"] = review_item_hashes(validation)
         (self.work / "supervisor_round_0.json").write_text(json.dumps(report))
         page = self.work / "review.html"
         render_report(self.work, page)
@@ -313,6 +318,33 @@ class SupervisorTests(unittest.TestCase):
         (self.work / "output/medium/scene.glb").write_bytes(b"changed GLB")
         render_report(self.work, page)
         self.assertNotIn("独立监督：revise", page.read_text())
+
+    def test_review_invalidates_when_only_question_or_answer_changes(self):
+        rows = []
+        for level in LEVELS:
+            asset = f"GLB-{level}".encode()
+            (self.work / "output" / level / "scene.glb").write_bytes(asset)
+            rows.append({"level": level, "sha256": hashlib.sha256(asset).hexdigest(),
+                         "question": f"Question {level}?", "answer": {"value": level},
+                         "hidden_copy_ids_at_start": [], "all_copies_discoverable": True})
+        validation = {"status": "candidate", "results": rows}
+        path = self.work / "output/validation.json"
+        path.write_text(json.dumps(validation))
+        report = verdicts()
+        report["artifact_sha256"] = {row["level"]: row["sha256"] for row in rows}
+        report["evidence_sha256"] = evidence_hashes(self.work)
+        report["review_item_sha256"] = review_item_hashes(validation)
+        (self.work / "supervisor_round_0.json").write_text(json.dumps(report))
+        page = self.work / "review.html"
+        render_report(self.work, page)
+        self.assertIn("独立监督：pass", page.read_text())
+        for field, value in (("question", "A revised question?"), ("answer", {"value": "revised"})):
+            changed = json.loads(json.dumps(validation))
+            changed["results"][0][field] = value
+            path.write_text(json.dumps(changed))
+            render_report(self.work, page)
+            self.assertNotIn("独立监督：pass", page.read_text())
+        path.write_text(json.dumps(validation))
 
 
 if __name__ == "__main__":

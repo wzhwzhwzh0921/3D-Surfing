@@ -18,8 +18,23 @@ def evidence_hashes(work: Path) -> dict[str, str]:
         for level in LEVELS for view in VIEWS}
 
 
+def review_item_hashes(validation: dict) -> dict[str, str]:
+    """Bind a review to the wording, proposed answer and camera it evaluated."""
+    results = {row["level"]: row for row in validation["results"]}
+    hashes = {}
+    for level in LEVELS:
+        row = results[level]
+        item = {"question_type": row.get("question_type"),
+                "question": row["question"],
+                "builder_answer": row["answer"]["value"],
+                "start_camera": row.get("start_camera")}
+        payload = json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        hashes[level] = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return hashes
+
+
 def current_review(work: Path, validation: dict) -> dict | None:
-    """Return only a report bound to the current GLBs and image evidence."""
+    """Return only a report bound to the current assets, images and QA item."""
     expected = {row["level"]: row["sha256"] for row in validation["results"]}
     try:
         actual = {level: hashlib.sha256(
@@ -28,14 +43,17 @@ def current_review(work: Path, validation: dict) -> dict | None:
         if actual != expected:
             return None
         evidence = evidence_hashes(work)
-    except FileNotFoundError:
+        items = review_item_hashes(validation)
+    except (FileNotFoundError, KeyError, TypeError):
         return None
     for path in sorted(work.glob("supervisor_round_*.json"), reverse=True):
         try:
             review = json.loads(path.read_text())
         except (OSError, ValueError):
             continue
-        if review.get("artifact_sha256") == actual and review.get("evidence_sha256") == evidence:
+        if (review.get("artifact_sha256") == actual and
+                review.get("evidence_sha256") == evidence and
+                review.get("review_item_sha256") == items):
             return review
     return None
 

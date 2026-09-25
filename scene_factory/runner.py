@@ -20,6 +20,7 @@ from .question_types import QUESTION_TYPES, type_order
 from .schema import read_candidate_pool, read_plan, validate_selection
 from .suitability import screen
 from .supervisor import (checked_image_reads, evidence_hashes, extract_result, reconcile_independent_answers,
+                         review_item_hashes,
                          repair_prompt, review_outcome, review_prompt,
                          validate_review)
 from .validate import validate
@@ -506,19 +507,29 @@ def supervisor_verdict_changes(before: dict, after: dict) -> dict[str, list[str]
 
 
 def repair_change_summary(before: dict, after: dict) -> dict[str, list[str]]:
-    """Separate fixing a scene from replacing its question or only its answer."""
-    question_changes = []
-    answer_changes = []
+    """Expose what the repair changed, not just whether the verdict improved."""
+    changes = {"changed_question_levels": [], "changed_answer_levels": [],
+               "changed_camera_levels": [], "changed_placement_levels": [],
+               "changed_evidence_design_levels": []}
     for position, level in enumerate(("simple", "medium", "hard")):
-        old = before["variants"][position].get("question", {})
-        new = after["variants"][position].get("question", {})
+        old_variant = before["variants"][position]
+        new_variant = after["variants"][position]
+        old = old_variant.get("question", {})
+        new = new_variant.get("question", {})
         if {k: v for k, v in old.items() if k != "declared_answer"} != {
                 k: v for k, v in new.items() if k != "declared_answer"}:
-            question_changes.append(level)
+            changes["changed_question_levels"].append(level)
         if old.get("declared_answer") != new.get("declared_answer"):
-            answer_changes.append(level)
-    return {"changed_question_levels": question_changes,
-            "changed_answer_levels": answer_changes}
+            changes["changed_answer_levels"].append(level)
+        if old_variant.get("start_camera") != new_variant.get("start_camera"):
+            changes["changed_camera_levels"].append(level)
+        if (old_variant.get("copies") != new_variant.get("copies") or
+                old_variant.get("entities") != new_variant.get("entities")):
+            changes["changed_placement_levels"].append(level)
+        if any(old_variant.get(key) != new_variant.get(key)
+               for key in ("occlusion_targets", "start_landmarks", "anchor_query")):
+            changes["changed_evidence_design_levels"].append(level)
+    return changes
 
 
 def clear_phase_artifacts(work: Path) -> None:
@@ -587,6 +598,7 @@ def supervise_and_repair(work: Path, scene_id: str, state: dict, report: dict, *
             review["artifact_sha256"] = {r["level"]: r.get("sha256")
                                          for r in report["results"]}
             review["evidence_sha256"] = evidence_hashes(work)
+            review["review_item_sha256"] = review_item_hashes(report)
             (work / f"supervisor_round_{index}.json").write_text(
                 json.dumps(review, ensure_ascii=False, indent=2))
             rounds.append({"round": index, "outcome": review_outcome(review),

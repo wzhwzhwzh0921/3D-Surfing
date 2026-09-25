@@ -8,7 +8,7 @@ import unittest
 from scene_factory.calibration import (evaluate_labels, make_label_template,
                                        _passes_needed_if_no_more_errors)
 from scene_factory.audit_review import render_label_page
-from scene_factory.supervisor import LEVELS, VIEWS, evidence_hashes
+from scene_factory.supervisor import LEVELS, VIEWS, evidence_hashes, review_item_hashes
 
 
 class CalibrationTests(unittest.TestCase):
@@ -33,6 +33,7 @@ class CalibrationTests(unittest.TestCase):
         report = {"schema_version": "sceneqa_supervisor_v2",
                   "artifact_sha256": {r["level"]: r["sha256"] for r in results},
                   "evidence_sha256": evidence_hashes(self.work),
+                  "review_item_sha256": review_item_hashes(self.validation),
                   "tiers": {level: {"verdict": "revise" if level == "hard" else "pass"}
                             for level in LEVELS}}
         (self.work / "supervisor_round_0.json").write_text(json.dumps(report))
