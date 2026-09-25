@@ -11,7 +11,9 @@ from .supervisor import LEVELS, VIEWS, current_review
 
 FIELDS = ("work_rel", "scene_id", "level", "question_type", "question",
           "model_answer_json", "asset_sha256", "evidence_sha256",
-          "human_verdict", "human_answer_correct", "human_note")
+          "human_start_leak", "human_verdict", "human_answer",
+          "human_answer_correct", "human_note")
+REQUIRED_FIELDS = set(FIELDS) - {"human_answer", "human_start_leak"}
 
 
 def tier_evidence_hash(work: Path, level: str) -> str:
@@ -47,7 +49,8 @@ def make_label_template(runs_root: Path, output: Path, *, overwrite: bool = Fals
                          "model_answer_json": json.dumps(result["answer"]["value"], ensure_ascii=False),
                          "asset_sha256": hashlib.sha256(asset.read_bytes()).hexdigest(),
                          "evidence_sha256": tier_evidence_hash(work, level),
-                         "human_verdict": "", "human_answer_correct": "", "human_note": ""})
+                         "human_start_leak": "", "human_verdict": "", "human_answer": "",
+                         "human_answer_correct": "", "human_note": ""})
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=FIELDS)
@@ -69,18 +72,20 @@ def evaluate_labels(labels: Path, runs_root: Path) -> dict:
     root = runs_root.resolve()
     with labels.open(newline="") as handle:
         reader = csv.DictReader(handle)
-        if not set(FIELDS) <= set(reader.fieldnames or []):
+        if not REQUIRED_FIELDS <= set(reader.fieldnames or []):
             raise ValueError("Label CSV is missing required columns")
         rows = list(reader)
     counts = {"rows": len(rows), "unlabeled": 0, "stale": 0,
               "human_uncertain": 0, "missing_supervisor": 0, "legacy_supervisor": 0,
-              "invalid_supervisor": 0,
+              "invalid_supervisor": 0, "human_inconsistent": 0,
+              "start_leak_yes": 0,
               "gold_binary": 0,
               "supervisor_pass": 0, "supervisor_review": 0, "supervisor_revise": 0,
               "false_accept": 0, "safe_accept": 0, "caught_or_abstained": 0}
     seen = set()
     scene_cache = {}
-    by_level = {level: {"gold_binary": 0, "false_accept": 0, "supervisor_pass": 0}
+    by_level = {level: {"gold_binary": 0, "false_accept": 0,
+                        "supervisor_pass": 0, "start_leak_yes": 0}
                 for level in LEVELS}
     for row in rows:
         key = (row["work_rel"], row["level"])
@@ -91,7 +96,10 @@ def evaluate_labels(labels: Path, runs_root: Path) -> dict:
             raise ValueError(f"Unknown level: {row['level']}")
         verdict = row["human_verdict"].strip().lower()
         correct = row["human_answer_correct"].strip().lower()
-        if verdict not in ("", "pass", "review", "fail") or correct not in ("", "yes", "no", "unknown"):
+        start_leak = (row.get("human_start_leak") or "").strip().lower()
+        if (verdict not in ("", "pass", "review", "fail") or
+                correct not in ("", "yes", "no", "unknown") or
+                start_leak not in ("", "yes", "no", "unknown")):
             raise ValueError(f"Invalid human label: {key}")
         work = (root / row["work_rel"]).resolve()
         if not work.is_relative_to(root):
@@ -122,7 +130,12 @@ def evaluate_labels(labels: Path, runs_root: Path) -> dict:
         if not verdict:
             counts["unlabeled"] += 1
             continue
-        gold_bad = verdict == "fail" or correct == "no"
+        if start_leak == "yes":
+            counts["start_leak_yes"] += 1
+            by_level[row["level"]]["start_leak_yes"] += 1
+        if start_leak == "yes" and verdict == "pass":
+            counts["human_inconsistent"] += 1
+        gold_bad = verdict == "fail" or correct == "no" or start_leak == "yes"
         gold_good = verdict == "pass" and correct == "yes"
         if not gold_bad and not gold_good:
             counts["human_uncertain"] += 1

@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 from scene_factory.calibration import evaluate_labels, make_label_template
+from scene_factory.audit_review import render_label_page
 from scene_factory.supervisor import LEVELS, VIEWS, evidence_hashes
 
 
@@ -89,6 +90,24 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(report["legacy_supervisor"], 3)
         self.assertEqual(report["gold_binary"], 0)
 
+    def test_start_view_shortcut_counts_as_bad_question(self):
+        self._fill()
+        with self.labels.open(newline="") as handle:
+            reader = csv.DictReader(handle)
+            rows = list(reader)
+            fields = reader.fieldnames
+        simple = next(row for row in rows if row["level"] == "simple")
+        simple["human_verdict"] = "review"
+        simple["human_answer_correct"] = "unknown"
+        simple["human_start_leak"] = "yes"
+        with self.labels.open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(rows)
+        report = evaluate_labels(self.labels, self.root)
+        self.assertEqual(report["false_accept"], 1)
+        self.assertEqual(report["start_leak_yes"], 1)
+
     def test_label_path_cannot_escape_runs_root(self):
         with self.labels.open(newline="") as handle:
             reader = csv.DictReader(handle)
@@ -101,6 +120,35 @@ class CalibrationTests(unittest.TestCase):
             writer.writerows(rows)
         with self.assertRaisesRegex(ValueError, "escapes runs root"):
             evaluate_labels(self.labels, self.root)
+        with self.assertRaisesRegex(ValueError, "escapes runs root"):
+            render_label_page(self.labels, self.root, self.root / "review.html")
+
+    def test_visual_review_page_shows_assets_and_escapes_questions(self):
+        with self.labels.open(newline="") as handle:
+            reader = csv.DictReader(handle)
+            rows = list(reader)
+            fields = reader.fieldnames
+        rows[0]["scene_id"] = "<img onerror=alert(1)>"
+        with self.labels.open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(rows)
+        page = self.root / "review.html"
+        result = render_label_page(self.labels, self.root, page)
+        markup = page.read_text()
+        self.assertEqual(result["questions"], 3)
+        self.assertIn('src="case_a/output/simple/scene.glb"', markup)
+        self.assertIn('src="case_a/output/simple/start.png"', markup)
+        self.assertNotIn("<img onerror=alert(1)>", markup)
+        self.assertIn("human_answer", markup)
+        self.assertIn("human_start_leak", markup)
+        self.assertIn('<details class="explore">', markup)
+        self.assertIn("导出标注 CSV", markup)
+
+    def test_visual_review_rejects_stale_asset(self):
+        (self.output / "simple" / "scene.glb").write_bytes(b"repaired")
+        with self.assertRaisesRegex(ValueError, "Label row is stale"):
+            render_label_page(self.labels, self.root, self.root / "review.html")
 
 
 if __name__ == "__main__":

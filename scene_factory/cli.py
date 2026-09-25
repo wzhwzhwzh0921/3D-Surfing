@@ -14,6 +14,7 @@ from .download import glb_header
 from .audit_sample import write_sample
 from .audit_gallery import render_audit_gallery
 from .calibration import evaluate_labels, make_label_template
+from .audit_review import render_label_page
 from .runner import ROOT, blender, run_batch, run_one, supervise_existing
 from .question_types import QUESTION_TYPES, type_order
 from .suitability import screen
@@ -106,6 +107,10 @@ def parser() -> argparse.ArgumentParser:
     audit_evaluate.add_argument("--labels", type=Path, required=True)
     audit_evaluate.add_argument("--runs-root", type=Path, required=True)
     audit_evaluate.add_argument("--output", type=Path)
+    audit_review = sub.add_parser("audit-review", help="Create a visual human-label page")
+    audit_review.add_argument("--labels", type=Path, required=True)
+    audit_review.add_argument("--runs-root", type=Path, required=True)
+    audit_review.add_argument("--output", type=Path, required=True)
     preflight = sub.add_parser("preflight")
     preflight.add_argument("--inventory", type=Path, required=True)
     inspect = sub.add_parser("inspect")
@@ -219,6 +224,9 @@ def main() -> None:
                 a.output.parent.mkdir(parents=True, exist_ok=True)
                 a.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
             print(json.dumps(report, ensure_ascii=False, indent=2))
+        elif a.command == "audit-review":
+            print(json.dumps(render_label_page(a.labels, a.runs_root, a.output),
+                             ensure_ascii=False, indent=2))
         elif a.command == "preflight":
             print(json.dumps(screen(json.loads(a.inventory.read_text())), ensure_ascii=False, indent=2))
         elif a.command == "inspect":
