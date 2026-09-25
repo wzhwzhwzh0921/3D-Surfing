@@ -13,3 +13,7 @@ python3 -m unittest discover -s tests -q
 python3 -m scene_factory.cli probe --source examples/fixtures/hidden.glb \
   --candidates examples/candidate_fixture_pool.json --output /tmp/sceneqa-probe
 ```
+
+2026-09-26 复测：增加地标可见表面比例和 35 像素最小投影门槛后，Low Poly House 原六候选的可用机位数变为：简单 A/B 均 0，中等 A 为 1、中等 B 为 2，困难 A 为 4、困难 B 为 0。此前餐桌只露一小块的简单题被拦下，中等 A 仍有一个侧面机位可用。这是预期的筛选；需要模型提出新的简单题与视觉上更容易区分的中等目标，不能把原来三题直接视为视觉合格。报告保存在 `/dev/shm/sceneqa_lowpoly_probe_visibility_v5/probe_report.json`。自制小场景复测中，简单候选仍有可用机位，中、困难候选仍因局部遮挡不成立被拒绝。新增提示词也要求身份题目标与周围同类物件在画面中可区分，以避免“白色坐垫在白色沙发旁”的歧义。这一语义条件仍依赖模型看图自查，尚未通过端到端 DeepSeek 调用验证。
+
+提前跳过无效机位的遮挡细算后，同一个真实场景六候选复测耗时 215 秒，六题的合格机位数与优化前完全一致。探测仍偏慢，不能把这次小幅加速视作大批量运行性能已经解决。

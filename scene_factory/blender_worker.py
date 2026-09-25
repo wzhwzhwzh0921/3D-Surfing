@@ -147,21 +147,30 @@ def candidate_camera_options(variant, augmented, spawned, original_by_name, anch
     options = []
     for az, el in angles:
         camera = camera_for(augmented, az, el)
-        landmark_evidence = {label: landmark_snapshot(camera, objects, 512)
-                             for label, objects in landmark_groups}
+        landmark_evidence = {}
+        for label, objects in landmark_groups:
+            # A ray hitting a single corner can make an unreadable landmark pass.
+            snapshot = landmark_snapshot(camera, objects, 512)
+            snapshot["visible_fraction"] = (round(visible_sample_fraction(camera, objects), 3)
+                                            if snapshot["visible"] and snapshot["extent_px"] >= 35
+                                            else 0.0)
+            landmark_evidence[label] = snapshot
         visible_copies = [cid for cid, objects in spawned.items()
                           if any(visible_from(camera, obj) for obj in objects)]
         hidden = sorted(set(spawned) - set(visible_copies))
+        landmark_ok = all(x["visible"] and x["extent_px"] >= 35 and
+                          x["visible_fraction"] >= 0.25
+                          for x in landmark_evidence.values())
+        occlusion_checked = bool(variant.get("occlusion_targets")) and landmark_ok and bool(hidden)
         occlusion = {}
         for item in variant.get("occlusion_targets", []):
             cid = item["target_copy_id"]
             names = item["blocker_objects"]
             if cid not in spawned or any(n not in original_by_name for n in names):
                 raise ValueError(f"Invalid occlusion target in candidate: {item}")
-            occlusion[cid] = occlusion_evidence(camera, spawned[cid], names,
-                                                [original_by_name[n] for n in names], augmented)
-        landmark_ok = all(x["visible"] and x["extent_px"] >= 26
-                          for x in landmark_evidence.values())
+            if occlusion_checked:
+                occlusion[cid] = occlusion_evidence(camera, spawned[cid], names,
+                                                    [original_by_name[n] for n in names], augmented)
         passing_blockers = {cid for cid, e in occlusion.items() if
                             cid in hidden and e["samples"] >= 10 and
                             e["blocked_fraction"] >= 0.35 and
@@ -176,12 +185,25 @@ def candidate_camera_options(variant, augmented, spawned, original_by_name, anch
                       variant["anchor_query"]["answer_anchor_object"] and
                       anchor_evidence["margin_ratio"] >= 0.15))
         eligible = landmark_ok and bool(hidden) and (variant["level"] == "simple" or local_blocker_ok) and anchor_ok
+        failure_reasons = []
+        if not landmark_ok:
+            failure_reasons.append("start_landmark_unreadable")
+        if not hidden:
+            failure_reasons.append("answer_target_visible_at_start")
+        if variant["level"] != "simple" and not local_blocker_ok:
+            failure_reasons.append("local_occlusion_missing" if occlusion_checked
+                                   else "local_occlusion_not_checked")
+        if not anchor_ok:
+            failure_reasons.append("nearest_anchor_invalid")
         score = (1000 if eligible else 0) + (200 if landmark_ok else 0) + (100 if hidden else 0)
         score += min((x["extent_px"] for x in landmark_evidence.values()), default=0)
         score += 100 * max((e["blocked_fraction"] for e in occlusion.values()), default=0)
         options.append({"azimuth_deg": az, "elevation_deg": el,
                         "landmarks": landmark_evidence, "hidden_copy_ids": hidden,
-                        "occlusion_evidence": occlusion, "eligible": eligible,
+                        "occlusion_evidence": occlusion,
+                        "occlusion_checked": occlusion_checked,
+                        "eligible": eligible,
+                        "failure_reasons": failure_reasons,
                         "score": round(score, 2)})
     return sorted(options, key=lambda x: x["score"], reverse=True)
 
@@ -425,10 +447,18 @@ def build(source, out, plan_path, *, preview_only=False):
             candidate_dir.mkdir(exist_ok=True)
             options = candidate_camera_options(variant, augmented, spawned, original_by_name, anchor_evidence)
             selected = options[:2]
+            if not selected[0]["eligible"]:
+                # Show both a readable landmark and the best hidden-target view
+                # when no camera passes. Otherwise the two previews can both
+                # leak the answer and hide why the candidate failed.
+                hidden_option = next((o for o in options if o["hidden_copy_ids"]), None)
+                if hidden_option is not None and hidden_option not in selected:
+                    selected[1] = hidden_option
             for index, option in enumerate(selected, 1):
                 render(augmented, candidate_dir / f"start_{index}.png",
                        option["azimuth_deg"], option["elevation_deg"], 512)
             report.append({"candidate_id": candidate_id, "level": variant["level"],
+                           "probe_protocol_version": "landmark_surface_v2",
                            "preview_resolution_px": 512,
                            "candidate_sha256": hashlib.sha256(json.dumps(
                                variant, ensure_ascii=False, sort_keys=True,

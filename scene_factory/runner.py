@@ -88,14 +88,18 @@ example of six complete entries; adapt all meshes, placements and questions.
 It must contain exactly six full candidate variants: TWO distinct proposals per
 level, simple/medium/hard. Each candidate declares start_landmarks: named
 original mesh group(s) that a solver must recognize in the starting image.
+Within a tier, make the two candidates materially different questions or
+target categories; changing only the copy position or camera wastes the
+fallback slot if the target itself is visually ambiguous.
 For hard questions, list the initial reference landmark only; candidate
 anchors that the solver is supposed to discover later need not be visible
 at the start. Do not name a distant unrelated table as the starting landmark.
 Write candidates promptly after source inspection, then call:
 {sys.executable} -m scene_factory.cli probe --source {work / 'source.glb'} --candidates {work / 'candidates.json'} --output {work / 'probe'}
 Read {work / 'probe/probe_report.json'} and each candidate's start_1.png and
-start_2.png. The probe reports landmark pixel extent, visible/hidden copied
-targets, the first actual occluding mesh, and whether local blocker conditions
+start_2.png. The probe reports landmark pixel extent and visible surface
+fraction, visible/hidden copied
+targets, failure_reasons, the first actual occluding mesh, and whether local blocker conditions
 pass. Prefer an eligible angle where all named landmarks are recognizable and
 the decisive target is hidden. If neither proposal for a level is eligible,
 revise candidates and run probe again before committing to a final plan.
@@ -164,7 +168,12 @@ QUESTION QUALITY AUDIT (apply separately to all three variants, not just verify)
    color, and another identical lantern can make an identity question guessable.
 2. After orbiting/focusing, is the answer itself visually identifiable from the
    revealed evidence? For identity, distinctive parts must be visible, not only
-   a generic body or the template object's mesh name. For color/texture, the
+   a generic body or the template object's mesh name. The target must also be
+   distinguishable from nearby original props: a loose white cushion beside
+   a white-cushioned sofa is a poor identity question even when its occlusion
+   checks pass. Prefer a native prop with a distinctive outline or material,
+   or ask about a visible distinguishing attribute if it remains hidden at
+   the start. For color/texture, the
    decisive surface must be visible under the actual scene lighting. For count,
    the named region and all matching objects in it must be inspectable. Do not
    use registry counts, copy IDs, object names or the planned template as proof
@@ -186,7 +195,9 @@ QUESTION QUALITY AUDIT (apply separately to all three variants, not just verify)
    If the supplied views cannot do this, redesign the question or report a
    visual-quality failure rather than asserting an answer.
 6. Do not accept a start image dominated by a roof, enclosing shell or blank
-   background when the named landmarks shrink to a few pixels. Do not identify
+   background when the named landmarks shrink to a few pixels. The numeric
+   landmark gate is only a floor: reject a table visible as just a sliver
+   behind walls after inspecting the actual rendered start image. Do not identify
    a hidden prop from an undiagnostic fabric corner or generic silhouette.
    Avoid low-contrast pairings such as transparent glasses on a glass tabletop;
    if the objects cannot be counted or recognized in the rendered pixels,

@@ -198,6 +198,7 @@ class PipelineTests(unittest.TestCase):
                     for level in ("simple", "medium", "hard")]
         plan = {"workflow_version": "candidate_probe_v1", "variants": json.loads(json.dumps(selected))}
         report = [{"candidate_id": v["candidate_id"],
+                   "probe_protocol_version": "landmark_surface_v2",
                    "candidate_sha256": hashlib.sha256(json.dumps(
                        v, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
                    "recommended": [
@@ -209,6 +210,10 @@ class PipelineTests(unittest.TestCase):
                                                     for level in ("simple", "medium", "hard")})
         self.path.write_text(json.dumps(assembled))
         self.assertEqual(read_plan(self.path)["workflow_version"], "candidate_probe_v1")
+        old_report = json.loads(json.dumps(report))
+        old_report[0].pop("probe_protocol_version")
+        with self.assertRaisesRegex(ValueError, "old camera protocol"):
+            validate_selection(plan, pool, old_report)
         plan["variants"][0]["copies"][0]["xy"][0] += 0.5
         with self.assertRaisesRegex(ValueError, "changed after probe"):
             validate_selection(plan, pool, report)
