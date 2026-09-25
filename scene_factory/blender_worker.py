@@ -163,10 +163,14 @@ def candidate_camera_options(variant, augmented, spawned, original_by_name, anch
         visible_copies = [cid for cid, objects in spawned.items()
                           if any(visible_from(camera, obj) for obj in objects)]
         hidden = sorted(set(spawned) - set(visible_copies))
+        answer_copies = set(spawned) & set(variant["question"].get("evidence_ids", []))
         landmark_ok = all(x["visible"] and x["extent_px"] >= 35 and
                           x["visible_fraction"] >= 0.25
                           for x in landmark_evidence.values())
-        occlusion_checked = bool(variant.get("occlusion_targets")) and landmark_ok and bool(hidden)
+        # A target can be partly visible while its answer-bearing side remains
+        # blocked. Do not require the entire copy to disappear before probing
+        # the declared nearby blocker.
+        occlusion_checked = bool(variant.get("occlusion_targets")) and landmark_ok
         occlusion = {}
         for item in variant.get("occlusion_targets", []):
             cid = item["target_copy_id"]
@@ -177,7 +181,8 @@ def candidate_camera_options(variant, augmented, spawned, original_by_name, anch
                 occlusion[cid] = occlusion_evidence(camera, spawned[cid], names,
                                                     [original_by_name[n] for n in names], augmented)
         passing_blockers = {cid for cid, e in occlusion.items() if
-                            cid in hidden and local_occlusion_passes(e, candidate_probe=True)}
+                            cid in answer_copies and local_occlusion_passes(e, candidate_probe=True)}
+        obscured = bool(set(hidden) & answer_copies) or bool(passing_blockers)
         local_blocker_ok = (bool(passing_blockers) if variant["level"] == "medium" else
                             variant.get("anchor_query", {}).get("target_copy_id") in passing_blockers)
         anchor_ok = (variant["level"] != "hard" or
@@ -185,22 +190,24 @@ def candidate_camera_options(variant, augmented, spawned, original_by_name, anch
                       anchor_evidence["resolved_anchor_object"] ==
                       variant["anchor_query"]["answer_anchor_object"] and
                       anchor_evidence["margin_ratio"] >= 0.15))
-        eligible = landmark_ok and bool(hidden) and (variant["level"] == "simple" or local_blocker_ok) and anchor_ok
+        eligible = landmark_ok and obscured and (variant["level"] == "simple" or local_blocker_ok) and anchor_ok
         failure_reasons = []
         if not landmark_ok:
             failure_reasons.append("start_landmark_unreadable")
-        if not hidden:
-            failure_reasons.append("answer_target_visible_at_start")
+        if not obscured:
+            failure_reasons.append("answer_target_unobscured_at_start")
         if variant["level"] != "simple" and not local_blocker_ok:
             failure_reasons.append("local_occlusion_missing" if occlusion_checked
                                    else "local_occlusion_not_checked")
         if not anchor_ok:
             failure_reasons.append("nearest_anchor_invalid")
-        score = (1000 if eligible else 0) + (200 if landmark_ok else 0) + (100 if hidden else 0)
+        score = (1000 if eligible else 0) + (200 if landmark_ok else 0) + (100 if obscured else 0)
         score += min((x["extent_px"] for x in landmark_evidence.values()), default=0)
         score += 100 * max((e["blocked_fraction"] for e in occlusion.values()), default=0)
         options.append({"azimuth_deg": az, "elevation_deg": el,
                         "landmarks": landmark_evidence, "hidden_copy_ids": hidden,
+                        "partly_obscured_copy_ids": sorted(passing_blockers),
+                        "start_obscured": obscured,
                         "occlusion_evidence": occlusion,
                         "occlusion_checked": occlusion_checked,
                         "eligible": eligible,
@@ -452,14 +459,14 @@ def build(source, out, plan_path, *, preview_only=False):
                 # Show both a readable landmark and the best hidden-target view
                 # when no camera passes. Otherwise the two previews can both
                 # leak the answer and hide why the candidate failed.
-                hidden_option = next((o for o in options if o["hidden_copy_ids"]), None)
+                hidden_option = next((o for o in options if o["start_obscured"]), None)
                 if hidden_option is not None and hidden_option not in selected:
                     selected[1] = hidden_option
             for index, option in enumerate(selected, 1):
                 render(augmented, candidate_dir / f"start_{index}.png",
                        option["azimuth_deg"], option["elevation_deg"], 512)
             report.append({"candidate_id": candidate_id, "level": variant["level"],
-                           "probe_protocol_version": "landmark_surface_v3",
+                           "probe_protocol_version": "landmark_surface_v4",
                            "preview_resolution_px": 512,
                            "candidate_sha256": hashlib.sha256(json.dumps(
                                variant, ensure_ascii=False, sort_keys=True,

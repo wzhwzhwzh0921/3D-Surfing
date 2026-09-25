@@ -68,7 +68,8 @@ def render_report(work: Path, output: Path) -> None:
                      f'<p><b>题目：</b>{html.escape(r["question"])}</p>'
                      f'<p><b>{answer_label}：</b>{html.escape(str(r["answer"]["value"]))}</p>'
                      f'{quality_note}'
-                     f'<p>起始视角隐藏副本 {len(r["hidden_copy_ids_at_start"])} 个；'
+                     f'<p>起始视角完全隐藏副本 {len(r["hidden_copy_ids_at_start"])} 个，'
+                     f'局部遮挡副本 {len(r.get("partly_obscured_copy_ids_at_start", []))} 个；'
                      f'全局或局部换焦可发现：{"是" if r["all_copies_discoverable"] else "否"}</p>'
                      f'<p><a href="{scene}">下载 GLB</a></p></article>')
     page = """<!doctype html><html lang="zh"><meta charset="utf-8"><title>Scene QA</title>

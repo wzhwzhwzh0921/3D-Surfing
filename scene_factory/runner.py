@@ -153,10 +153,11 @@ Write candidates promptly after source inspection, then call:
 {sys.executable} -m scene_factory.cli probe --source {work / 'source.glb'} --candidates {work / 'candidates.json'} --output {work / 'probe'}
 Read {work / 'probe/probe_report.json'} and each candidate's start_1.png and
 start_2.png. The probe reports landmark pixel extent and visible surface
-fraction, visible/hidden copied
+fraction, fully hidden or partly blocked copied
 targets, failure_reasons, the first actual occluding mesh, and whether local blocker conditions
 pass. Prefer an eligible angle where all named landmarks are recognizable and
-the decisive target is hidden. If neither proposal for a level is eligible,
+the decisive answer-bearing feature is hidden. A partly visible target is fine
+when its answer-bearing side remains concealed. If neither proposal for a level is eligible,
 revise candidates and run probe again before committing to a final plan.
 Then select exactly one candidate per level and create {work / 'plan.json'} following {ROOT / 'docs/PLAN_SCHEMA.md'} and
 {ROOT / 'docs/QUESTION_TYPES.md'}. Apply {ROOT / 'docs/REVIEW_POLICY.md'}
@@ -279,7 +280,10 @@ objects, then move to that anchor and overcome local occlusion. Declare
 anchor_query with relation=nearest, reference_object, candidate_objects,
 answer_anchor_object, target_copy_id. The target must be occluded by the resolved
 answer anchor. A second hidden decoy is optional; more objects alone do not make
-the question hard. Place at least one hidden copy in each tier. Choose an explicit
+the question hard. In each tier, conceal at least one copied target or its
+answer-bearing feature at the start. For a partially visible simple target,
+declare an occlusion_targets entry for its nearby blocker so the probe can
+measure that concealment. Choose an explicit
 start camera so the answer is not directly available. All copies must be discoverable
 from a global orbit or from a focused, zoomed local view. Hard need not claim
 30 actions without blind test.

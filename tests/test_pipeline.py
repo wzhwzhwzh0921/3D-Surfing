@@ -215,7 +215,7 @@ class PipelineTests(unittest.TestCase):
                     for level in ("simple", "medium", "hard")]
         plan = {"workflow_version": "candidate_probe_v1", "variants": json.loads(json.dumps(selected))}
         report = [{"candidate_id": v["candidate_id"],
-                   "probe_protocol_version": "landmark_surface_v3",
+                   "probe_protocol_version": "landmark_surface_v4",
                    "candidate_sha256": hashlib.sha256(json.dumps(
                        v, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
                    "recommended": [

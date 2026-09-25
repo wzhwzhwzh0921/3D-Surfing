@@ -38,6 +38,7 @@ def validate(plan_path: Path, output: Path, *, strict: bool = True) -> dict:
                                           "source_meshes": entity["objects"],
                                           "warning": "kind label is not supported by mesh names; visual audit required"})
         declared = {c["id"] for c in variant["copies"]}
+        answer_copies = declared & set(variant["question"].get("evidence_ids", []))
         exported = set(build["copy_mesh_names"])
         if declared != exported or build["export_mesh_count"] <= build["original_mesh_count"]:
             raise ValueError(f"{level}: copies missing from exported scene")
@@ -46,31 +47,38 @@ def validate(plan_path: Path, output: Path, *, strict: bool = True) -> dict:
         seen_in_probes = {cid for p in build["view_probes"] for cid in p["visible_copy_ids"]}
         seen_in_probes |= {p["copy_id"] for p in build.get("local_view_probes", [])}
         coverage = declared <= seen_in_probes
-        min_hidden = {"simple": 1, "medium": 1 if plan["schema_version"] in ("1.1", *MODERN) else 2,
-                      "hard": 1 if plan["schema_version"] in MODERN else
-                      2 if plan["schema_version"] == "1.1" else 3}[level]
-        nontrivial = len(unseen) >= min_hidden
-        # Different probes are required to expose all hidden copies. This is an
-        # observable proxy, not a claim about 30 navigation actions.
-        reachable = [p for p in build["view_probes"] if set(p["visible_copy_ids"]) & unseen]
-        reachable += [p for p in build.get("local_view_probes", []) if p["copy_id"] in unseen]
+        partial_allowed = plan["schema_version"] == "1.3" and plan.get("workflow_version") == "candidate_probe_v1"
+        min_hidden = (0 if partial_allowed else
+                      {"simple": 1, "medium": 1 if plan["schema_version"] in ("1.1", *MODERN) else 2,
+                       "hard": 1 if plan["schema_version"] in MODERN else
+                       2 if plan["schema_version"] == "1.1" else 3}[level])
+        # A second angle must expose an answer-bearing copy. This is an
+        # observable reachability proxy, not proof that its key surface is seen.
+        reachable_ids = answer_copies if partial_allowed else unseen
+        start_cam = build["start_camera"]
+        reachable = [p for p in build["view_probes"]
+                     if set(p["visible_copy_ids"]) & reachable_ids and
+                     (not partial_allowed or p["azimuth_deg"] != start_cam["azimuth_deg"] or
+                      p["elevation_deg"] != start_cam["elevation_deg"])]
+        reachable += [p for p in build.get("local_view_probes", []) if p["copy_id"] in reachable_ids]
         occlusion = build.get("occlusion_evidence", {})
         evidence_views = build.get("evidence_views", {})
         evidence_present = (plan["schema_version"] != "1.3" or
                             all((output / level / f"{name}.png").is_file()
-                                for name in (("reveal", "detail", "answer_view")
+                                for name in (("start", "reveal", "detail", "answer_view")
                                              if plan.get("workflow_version") == "candidate_probe_v1"
-                                             else ("reveal", "detail"))))
+                                             else ("start", "reveal", "detail"))))
         answer_view_coverage = evidence_views.get("answer_view_coverage", {})
         answer_view_gate = (plan.get("workflow_version") != "candidate_probe_v1" or
                             answer_view_coverage.get("all_visible") is True)
         occlusion_gate = True
         if level in ("medium", "hard") and plan["schema_version"] in ("1.1", *MODERN):
-            # A hidden target must be concealed by a named, nearby scene prop,
-            # rather than merely disappearing behind the global perimeter wall.
+            # The answer-bearing target must be concealed by a nearby prop;
+            # another irrelevant copy does not establish question difficulty.
             new_probe = plan.get("workflow_version") == "candidate_probe_v1"
             passing_occlusion = {cid: evidence for cid, evidence in occlusion.items()
-                                 if cid in unseen and local_occlusion_passes(
+                                 if (not partial_allowed or cid in answer_copies) and
+                                 (partial_allowed or cid in unseen) and local_occlusion_passes(
                                      evidence, candidate_probe=new_probe)}
             if level == "medium":
                 occlusion_gate = bool(passing_occlusion)
@@ -86,12 +94,25 @@ def validate(plan_path: Path, output: Path, *, strict: bool = True) -> dict:
                 occlusion_gate = (anchor.get("resolved_anchor_object") == query["answer_anchor_object"] and
                                   anchor.get("margin_ratio", 0) >= 0.15 and
                                   query["target_copy_id"] in passing_occlusion)
+        if partial_allowed:
+            passing_partial = {cid for cid, evidence in occlusion.items()
+                               if cid in answer_copies and local_occlusion_passes(evidence, candidate_probe=True)}
+            obscuration_gate = bool((unseen & answer_copies) or passing_partial)
+            nontrivial = obscuration_gate
+        else:
+            passing_partial = set()
+            obscuration_gate = len(unseen) >= min_hidden
+            nontrivial = obscuration_gate
         gate = (coverage and nontrivial and bool(reachable) and
                 not build.get("copy_collisions") and occlusion_gate and evidence_present and
                 answer_view_gate)
         results.append({"level": level, "scene": str(path), "sha256": digest,
                         "question": variant["question"]["text"], "answer": answer,
                         "start_camera": build["start_camera"], "hidden_copy_ids_at_start": sorted(unseen),
+                        "partly_obscured_copy_ids_at_start": sorted(passing_partial),
+                        "obscuration_gate": obscuration_gate,
+                        "obscuration_mode": ("whole_copy_hidden" if unseen & answer_copies else
+                                             "local_partial_blocker" if passing_partial else "none"),
                         "visible_copy_ids_from_probes": sorted(seen_in_probes),
                         "local_view_probes": build.get("local_view_probes", []),
                         "all_copies_discoverable": coverage, "min_hidden_required": min_hidden,

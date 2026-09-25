@@ -28,11 +28,11 @@
 sceneqa probe --source /data/source.glb --candidates /data/candidates.json --output /data/probe
 ```
 
-`probe_report.json` 为每个候选扫描全局方位与仰角，记录起始地标是否可见、投影尺寸、可见表面采样比例、隐藏的复制件、局部遮挡射线的第一命中物、困难题最近地标关系，并给出两张推荐机位预览 `候选ID/start_1.png`、`start_2.png`。地标须至少有 35 像素投影范围和 25% 可见表面采样比例，才通过预设的起始地标门槛；不通过时，`failure_reasons` 标出失败条件，并尽量同时给出地标较清楚和目标被遮住的两张预览，便于修改候选。`eligible` **不保证画面语义清楚或答案正确**。agent 必须打开候选图确认题干地标确实可认，尤其不能把仅露出一角的桌子当作可辨地标；两道都不行时修改候选再探测。
+`probe_report.json` 为每个候选扫描全局方位与仰角，记录起始地标是否可见、投影尺寸、可见表面采样比例、完全隐藏或被近处物件局部遮挡的复制件、局部遮挡射线的第一命中物、困难题最近地标关系，并给出两张推荐机位预览 `候选ID/start_1.png`、`start_2.png`。地标须至少有 35 像素投影范围和 25% 可见表面采样比例，才通过预设的起始地标门槛；不通过时，`failure_reasons` 标出失败条件。`eligible` **只证明存在遮挡代理，不保证被挡住的正是答案关键特征，也不保证画面语义清楚或答案正确**。agent 必须打开候选图确认地标可认、答案不能从已露出的表面推出；两道都不行时修改候选再探测。
 
 最后从每档选一题，写 `plan.json`：保持 `schema_version: "1.3"`，加入 `workflow_version: "candidate_probe_v1"`，每个 variant 保留 `candidate_id`，填入探测通过的 `start_camera`。选中候选的摆放、题干、地标等字段须与探测时相同；若改变，先重新运行 probe。最终三题仍须题型、答案各不相同，答案由模型在正式构建后看图填写。
 
-`select` 现在要求报告使用 `landmark_surface_v3` 机位协议；旧探测报告需重新运行 `probe`，以免沿用旧的起始地标或遮挡门槛。
+`select` 现在要求报告使用 `landmark_surface_v4` 机位协议；旧探测报告需重新运行 `probe`，以免沿用旧的遮挡门槛。
 当起始地标本身不清楚，或目标已经从起始角度露出时，探测器会跳过这一角度的局部遮挡射线细算，并在 `failure_reasons` 中标为 `local_occlusion_not_checked`；只有完成细算且确实不满足要求时才标为 `local_occlusion_missing`。
 
 可用 `sceneqa select --candidates /data/candidates.json --probe-report /data/probe/probe_report.json --simple simple_a --medium medium_b --hard hard_a --output /data/plan.json` 自动复制候选，避免手工重抄字段。每档默认采用 `start_1.png` 对应机位；若第二张更好，给相应档位加 `--simple-view 2` 等参数。只允许选择 `eligible` 的预览。

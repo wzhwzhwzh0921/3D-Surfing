@@ -58,7 +58,7 @@ def validate_selection(plan: dict, pool: dict, probe_report: list[dict]) -> None
         cid = variant.get("candidate_id")
         if cid not in by_id or cid not in reports or by_id[cid]["level"] != variant["level"]:
             raise ValueError(f"{variant['level']}: select one probed candidate of the same level")
-        if reports[cid].get("probe_protocol_version") != "landmark_surface_v3":
+        if reports[cid].get("probe_protocol_version") != "landmark_surface_v4":
             raise ValueError(f"{cid}: probe report uses an old camera protocol; run probe again")
         digest = hashlib.sha256(json.dumps(by_id[cid], ensure_ascii=False, sort_keys=True,
                                            separators=(",", ":")).encode()).hexdigest()
@@ -145,9 +145,12 @@ def read_plan(path: str | Path) -> dict:
         if level in ("medium", "hard") and plan["schema_version"] in ("1.1", *MODERN):
             if level == "medium" and len(copies) > 2:
                 raise ValueError("medium: use at most two new targets; difficulty should come from occlusion")
-            occlusion_targets = v.get("occlusion_targets")
-            if not isinstance(occlusion_targets, list) or not occlusion_targets:
+            if not v.get("occlusion_targets"):
                 raise ValueError(f"{level}: declare occlusion targets")
+        occlusion_targets = v.get("occlusion_targets", [])
+        if not isinstance(occlusion_targets, list):
+            raise ValueError(f"{level}: occlusion_targets must be a list")
+        if occlusion_targets:
             if level == "hard" and plan["schema_version"] == "1.1" and (len(occlusion_targets) < 2 or len({
                 t.get("target_copy_id") for t in occlusion_targets}) < 2):
                 raise ValueError("hard: at least two distinct hidden targets are required")
@@ -197,6 +200,12 @@ def read_plan(path: str | Path) -> dict:
                 eid not in set(ids) | set(copy_ids) for eid in evidence_ids
             ):
                 raise ValueError(f"{level}: evidence_ids must refer to declared objects or copies")
+            if plan["schema_version"] == "1.3" and not set(evidence_ids) & set(copy_ids):
+                raise ValueError(f"{level}: evidence_ids must include an answer-bearing copy")
+            if level == "hard" and plan["schema_version"] == "1.3" and (
+                v["anchor_query"]["target_copy_id"] not in evidence_ids
+            ):
+                raise ValueError("hard: resolved anchor target must be in evidence_ids")
         if q.get("kind") not in {e["kind"] for e in entities}:
             raise ValueError(f"{level}: target kind absent from entity registry")
         if q["mode"] == "compare" and q.get("other_kind") not in {e["kind"] for e in entities}:
