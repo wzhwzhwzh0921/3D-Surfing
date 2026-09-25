@@ -38,7 +38,7 @@ sceneqa select --candidates /data/candidates.json --probe-report /data/probe/pro
 
 `.env` 不会自动加载，必须先 `source`；若 key 存在私有文件中，可用 `--key-file /private/path/key.txt`，支持纯 key 文件或包含 `TOKENHUB_API_KEY=` / `TENCENT_ENDPOINT_API_KEY=` 的 `.env`。不要把私有文件放进本仓库。
 
-`run` 支持 `--input-path` 本地 GLB 和 `--dry-run`，后者只做源资产预检和四张彩色预览，不调用模型。设置 `SCENEQA_QUESTION_SEED` 可改变可复现的题型顺序；模型可跳过不适合当前场景的题型，并在 `agent_notes.md` 说明原因。`batch` 默认一个 worker，最多四个，并按 `uid` 续跑：已有 `candidate`、`needs_review` 或 `visual_rejected` 结果会跳过；失败项保留 `status.json`、日志和中间产物。源下载有大小上限（默认 100 MB）、SHA256、GLB v2 头检查、断点式缓存与 429/5xx 重试。批量运行可用 `--max-bytes` 调整上限。
+`run` 支持 `--input-path` 本地 GLB 和 `--dry-run`，后者只做源资产预检和四张彩色预览，不调用模型。设置 `SCENEQA_QUESTION_SEED` 可改变可复现的题型顺序；模型可跳过不适合当前场景的题型，并在 `agent_notes.md` 说明原因。`batch` 默认一个 worker，最多四个，并按 `uid` 续跑：已有 `candidate`、`needs_review`、`visual_needs_review` 或 `visual_rejected` 结果会跳过；失败项保留 `status.json`、日志和中间产物。源下载有大小上限（默认 100 MB）、SHA256、GLB v2 头检查、断点式缓存与 429/5xx 重试。批量运行可用 `--max-bytes` 调整上限。
 
 若原场景缺少至少两类可自然重复的小物件，或缺少困难题所需的两个可区分地标，agent 应生成 `unsuitable.json` 记录原因，批量结果标为 `unsuitable`，而不是复制房屋、横梁或地面凑题。目录筛选的“可下载、场景复杂度合适”不等同于“适合三道探索题”；这一判断也是正式入库前的人工复核项。
 
@@ -78,11 +78,15 @@ cd /data/sceneqa-runs/<uid> && python3 -m http.server 8000
 
 新版 `1.3` 要求三题类型不同，并验证起始遮挡、局部遮挡及困难题的最近地标线索。`candidate_probe_v1` 还要求先查看六个候选预览、选用探测通过的机位，再检查每档 `start/reveal/detail/answer_view.png`；程序核对 Claude Code 的图片读取记录，随后由模型自行给出或修正三道题的答案。**程序不计算、不核对任何题目的答案**；`validation.json` 中的 `answer.source` 为 `model_visual`，`answer_verified` 为 `false`。复制对象只能来自原场景，并用支撑网格向下射线定位；导出保留原几何与材质。具体字段见 [计划协议](docs/PLAN_SCHEMA.md)。
 
-`candidate` 表示三份模型和预设的结构/视角条件通过检查，**不表示模型答案正确或已认证为 benchmark gold**。程序无法仅凭 GLB 证明原场景同类物件清点完整、摆放符合语境，或一道题真的需要 30 次操作。若未来要发布严格题库，再对答案抽样复核并运行盲测 agent；当前流水线按你的要求保留模型自行作答的结果。
+`validation.json` 的 `candidate` 只表示三份模型和预设的结构/视角条件通过检查；`status.json` 的 `candidate` 还要求模型自评三题均为 `pass`。两者都**不表示模型答案正确或已认证为 benchmark gold**。程序无法仅凭 GLB 证明原场景同类物件清点完整、摆放符合语境，或一道题真的需要 30 次操作。若未来要发布严格题库，再对答案抽样复核并运行盲测 agent；当前流水线按你的要求保留模型自行作答的结果。
 
 生成提示词还要求模型逐档查看 `start/reveal/detail/answer_view.png` 并做语义自查：起始图及同款原物件是否泄露答案，揭示图是否清楚露出关键形状或颜色，题目指向的地标与方位是否唯一，以及复制件是否自然地落在场景里。发现捷径或歧义时，应修改候选题、摆放或相机后重新探测和构建，并在 `agent_notes.md` 记录每档的证据与残留疑点。这些是提示词要求，不是自动判真值；正式题库仍需人工审阅和盲测。
 
-模型还需写 `visual_quality.json`，逐档声明视觉自查是否通过并说明原因。若任一档失败，即使 `validation.json` 为结构性 `candidate`，批处理的 `status.json` 也标为 `visual_rejected`；缺少自查文件则标为 `needs_review`。这只是保留模型自己的看图结论，并不自动核验答案。
+模型还需写 `visual_quality.json`，逐档给出 `pass`、`review` 或 `fail` 和原因。`review` 用于画面基本有证据、但物件身份或取景仍有具体疑点的题，整组状态为 `visual_needs_review`，保留已通过的档位供后续修题或人工复核，不能直接入库；明确不可解或有答案捷径时用 `fail`，整组标为 `visual_rejected`。三档都 `pass` 才能得到结构性 `candidate`；缺少自查文件为 `needs_review`。这只是保留模型自己的看图结论，并不自动核验答案。
+
+三档最低解题过程、轻度遮挡的准入条件以及 `pass/review/fail` 的具体边界见[难度与视觉审核协议](docs/REVIEW_POLICY.md)。
+
+`batch` 摘要同时统计场景状态和 `tier_pass/tier_review/tier_fail`，便于看到一组场景被拒绝时仍有多少单题可用；`report` 页面逐题显示自评状态与原因。
 
 若改用 Codex Sol 逐场景手工调用，使用[单场景任务模板](docs/CODEX_SOL_TASK.md)，每次替换源 GLB、工作目录和仓库路径；该模板包含相同的反捷径与视觉复核要求。
 

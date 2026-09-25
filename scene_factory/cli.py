@@ -25,8 +25,9 @@ def catalog_rows(path: Path) -> list[dict]:
 def render_report(work: Path, output: Path) -> None:
     validation = json.loads((work / "output/validation.json").read_text())
     quality_path = work / "visual_quality.json"
-    visual_status = (json.loads(quality_path.read_text()).get("status")
-                     if quality_path.exists() else "needs_review")
+    visual_quality = json.loads(quality_path.read_text()) if quality_path.exists() else {}
+    visual_status = visual_quality.get("status", "needs_review")
+    quality_tiers = visual_quality.get("tiers", {})
     captions = {"reveal": "全景揭示视角", "detail": "单目标局部视角",
                 "answer_view": "按题型生成的同框证据"}
     cards = []
@@ -39,10 +40,14 @@ def render_report(work: Path, output: Path) -> None:
         extra_images = "".join(
             f'<figure><img src="{html.escape(os.path.relpath((work / "output" / level / f"{name}.png").resolve(), output.parent.resolve()))}" alt="{name}"><figcaption>{captions[name]}</figcaption></figure>'
             for name in ("reveal", "detail", "answer_view") if (work / "output" / level / f"{name}.png").is_file())
+        tier_quality = quality_tiers.get(level, {})
+        quality_note = (f'<p><b>视觉自评：{html.escape(str(tier_quality.get("status", "未审核")))}</b> '
+                        f'{html.escape(str(tier_quality.get("reason", "")))}</p>')
         cards.append(f'<article><h2>{html.escape(level)}</h2><model-viewer src="{html.escape(scene)}" camera-controls auto-rotate shadow-intensity="1" alt="{level} 3D scene"></model-viewer><img src="{html.escape(img)}" alt="起始视角">'
                      f'{extra_images}'
                      f'<p><b>题目：</b>{html.escape(r["question"])}</p>'
                      f'<p><b>{answer_label}：</b>{html.escape(str(r["answer"]["value"]))}</p>'
+                     f'{quality_note}'
                      f'<p>起始视角隐藏副本 {len(r["hidden_copy_ids_at_start"])} 个；'
                      f'全局或局部换焦可发现：{"是" if r["all_copies_discoverable"] else "否"}</p>'
                      f'<p><a href="{scene}">下载 GLB</a></p></article>')
@@ -201,9 +206,15 @@ def main() -> None:
                                timeout=a.timeout, dry_run=a.dry_run, provider=a.provider,
                                key_file=a.key_file, upstream=a.upstream, model=a.model,
                                preflight=not a.no_preflight)
+            tier_statuses = [tier.get("status") for item in result
+                             for tier in ((item.get("visual_quality") or {}).get("tiers") or {}).values()]
             print(json.dumps({"total": len(result), "candidate": sum(x["status"] == "candidate" for x in result),
                               "needs_review": sum(x["status"] == "needs_review" for x in result),
+                              "visual_needs_review": sum(x["status"] == "visual_needs_review" for x in result),
                               "visual_rejected": sum(x["status"] == "visual_rejected" for x in result),
+                              "tier_pass": tier_statuses.count("pass"),
+                              "tier_review": tier_statuses.count("review"),
+                              "tier_fail": tier_statuses.count("fail"),
                               "unsuitable": sum(x["status"] == "unsuitable" for x in result),
                               "failed": sum(x["status"] == "failed" for x in result),
                               "results": result}, ensure_ascii=False, indent=2))

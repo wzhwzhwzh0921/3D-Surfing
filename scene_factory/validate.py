@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from .download import glb_header
+from .occlusion_policy import local_occlusion_passes
 from .schema import MODERN, answer_from_model, answer_from_registry, read_plan
 
 
@@ -67,12 +68,10 @@ def validate(plan_path: Path, output: Path, *, strict: bool = True) -> dict:
         if level in ("medium", "hard") and plan["schema_version"] in ("1.1", *MODERN):
             # A hidden target must be concealed by a named, nearby scene prop,
             # rather than merely disappearing behind the global perimeter wall.
+            new_probe = plan.get("workflow_version") == "candidate_probe_v1"
             passing_occlusion = {cid: evidence for cid, evidence in occlusion.items()
-                                 if cid in unseen and evidence["samples"] >= 10 and
-                                 evidence["blocked_fraction"] >= 0.35 and
-                                 evidence["mean_blocker_gap"] is not None and
-                                 evidence["mean_blocker_gap"] <= evidence["max_allowed_gap"] and
-                                 evidence["blocker_width_ratio"] <= 0.45}
+                                 if cid in unseen and local_occlusion_passes(
+                                     evidence, candidate_probe=new_probe)}
             if level == "medium":
                 occlusion_gate = bool(passing_occlusion)
             elif plan["schema_version"] == "1.1":

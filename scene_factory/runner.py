@@ -104,7 +104,8 @@ pass. Prefer an eligible angle where all named landmarks are recognizable and
 the decisive target is hidden. If neither proposal for a level is eligible,
 revise candidates and run probe again before committing to a final plan.
 Then select exactly one candidate per level and create {work / 'plan.json'} following {ROOT / 'docs/PLAN_SCHEMA.md'} and
-{ROOT / 'docs/QUESTION_TYPES.md'}. Use schema_version 1.3.
+{ROOT / 'docs/QUESTION_TYPES.md'}. Apply {ROOT / 'docs/REVIEW_POLICY.md'}
+for difficulty and per-tier visual decisions. Use schema_version 1.3.
 Use the select command to copy your chosen proposals without transcription:
 {sys.executable} -m scene_factory.cli select --candidates {work / 'candidates.json'} --probe-report {work / 'probe/probe_report.json'} --simple SIMPLE_ID --medium MEDIUM_ID --hard HARD_ID --output {work / 'plan.json'}
 If you prefer a candidate's second preview, add --simple-view 2,
@@ -211,7 +212,8 @@ DIFFICULTY: Simple gives a direct target but hides critical evidence at the star
 Medium gives a direct target/anchor but requires overcoming VISUAL OCCLUSION:
 use at most two target copies, place at least one behind a nearby natural scene
 prop, and declare occlusion_targets with exact blocker mesh name(s). The builder raycasts target surface
-samples and requires at least 35% blocked by that named prop at the start view;
+samples and requires at least 20% blocked by that named prop at the start view,
+with the named prop responsible for at least half of first obstruction hits;
    the blocker must be small relative to the scene and close to the target, so a
    perimeter wall, floor slab or roof alone is not sufficient. Before committing
    a start camera, inspect which mesh actually blocks the target ray; if the
@@ -262,8 +264,16 @@ Also write {work / 'visual_quality.json'} after visual review in this form:
 {{"status":"accepted","tiers":{{"simple":{{"status":"pass","reason":"..."}},
 "medium":{{"status":"pass","reason":"..."}},
 "hard":{{"status":"pass","reason":"..."}}}}}}.
-If any tier fails the visual audit, set its status to fail and overall status
-to rejected. This is your own visual judgment, not automatic answer checking.
+Use pass only when the image evidence makes the landmark, target and answer
+clear. Use review for a specific unresolved visual ambiguity that a human could
+settle from the saved views, such as a small but recognizable prop or uncertain
+material identity; name that uncertainty in reason. Use fail for a proven
+answer shortcut, an unrecognizable start landmark, missing answer evidence,
+unnatural placement or an unanswerable question. If any tier fails, overall
+status is rejected; otherwise if any tier needs review, overall status is
+needs_review; only three passes may be accepted. Review is not a pass and must
+not enter the accepted question bank. This is your own visual judgment, not
+automatic answer checking.
 Structural validation may still say candidate; never label a visually rejected
 scene as ready for the question bank.
 """
@@ -330,20 +340,24 @@ def visual_quality_status(path: Path) -> tuple[str, dict | None]:
     if not path.exists():
         return "needs_review", None
     quality = json.loads(path.read_text())
-    if quality.get("status") not in ("accepted", "rejected"):
-        raise ValueError("visual_quality.json status must be accepted or rejected")
+    if quality.get("status") not in ("accepted", "needs_review", "rejected"):
+        raise ValueError("visual_quality.json status must be accepted, needs_review or rejected")
     tiers = quality.get("tiers")
     if not isinstance(tiers, dict) or set(tiers) != {"simple", "medium", "hard"}:
         raise ValueError("visual_quality.json must review all three tiers")
     if any(not isinstance(tiers[level], dict) or
-           tiers[level].get("status") not in ("pass", "fail") or
+           tiers[level].get("status") not in ("pass", "review", "fail") or
            not isinstance(tiers[level].get("reason"), str) or
            not tiers[level]["reason"].strip()
            for level in tiers):
-        raise ValueError("Each visual-quality tier needs a pass/fail status and reason")
-    if quality["status"] == "accepted" and any(tiers[level]["status"] == "fail" for level in tiers):
-        raise ValueError("visual_quality.json cannot accept a failed tier")
-    return ("visual_rejected" if quality["status"] == "rejected" else "accepted"), quality
+        raise ValueError("Each visual-quality tier needs a pass/review/fail status and reason")
+    tier_statuses = {tiers[level]["status"] for level in tiers}
+    if quality["status"] == "accepted" and tier_statuses != {"pass"}:
+        raise ValueError("visual_quality.json cannot accept a non-passing tier")
+    if quality["status"] == "needs_review" and "fail" in tier_statuses:
+        raise ValueError("visual_quality.json cannot mark a failed tier needs_review")
+    return {"accepted": "accepted", "needs_review": "visual_needs_review",
+            "rejected": "visual_rejected"}[quality["status"]], quality
 
 
 def run_one(row: dict, output_root: Path, *, source_path: Path | None = None,
@@ -357,9 +371,10 @@ def run_one(row: dict, output_root: Path, *, source_path: Path | None = None,
     status_file = work / "status.json"
     if status_file.exists() and not force:
         old_status = json.loads(status_file.read_text())
-        if old_status.get("status") in ("unsuitable", "visual_rejected", "candidate", "needs_review"):
+        if old_status.get("status") in ("unsuitable", "visual_rejected", "visual_needs_review",
+                                        "candidate", "needs_review"):
             return {"scene_id": scene_id, "status": old_status["status"], "skipped": True,
-                    "work": str(work)}
+                    "work": str(work), "visual_quality": old_status.get("visual_quality")}
     if validation_path.exists() and not force:
         old = json.loads(validation_path.read_text())
         if old.get("status") in ("candidate", "needs_review"):

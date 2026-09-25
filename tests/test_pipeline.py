@@ -8,6 +8,7 @@ from scene_factory.schema import (answer_from_model, answer_from_registry, read_
                                   read_plan, select_candidates, validate_selection)
 from scene_factory.download import glb_header
 from scene_factory.gateway import normalize_usage
+from scene_factory.occlusion_policy import local_occlusion_passes
 from scene_factory.question_types import QUESTION_TYPES, type_order
 from scene_factory.runner import observed_evidence_reads, observed_probe_reads, visual_quality_status
 
@@ -48,8 +49,24 @@ class PipelineTests(unittest.TestCase):
         path.write_text(json.dumps({"status": "rejected", "tiers": tiers}))
         self.assertEqual(visual_quality_status(path)[0], "visual_rejected")
         path.write_text(json.dumps({"status": "accepted", "tiers": tiers}))
-        with self.assertRaisesRegex(ValueError, "cannot accept a failed tier"):
+        with self.assertRaisesRegex(ValueError, "cannot accept a non-passing tier"):
             visual_quality_status(path)
+        tiers["medium"] = {"status": "review", "reason": "The cushion is visible but may match the sofa"}
+        path.write_text(json.dumps({"status": "needs_review", "tiers": tiers}))
+        self.assertEqual(visual_quality_status(path)[0], "visual_needs_review")
+        path.write_text(json.dumps({"status": "accepted", "tiers": tiers}))
+        with self.assertRaisesRegex(ValueError, "cannot accept a non-passing tier"):
+            visual_quality_status(path)
+
+    def test_moderate_local_occlusion_needs_dominant_nearby_blocker(self):
+        evidence = {"samples": 48, "blocked_samples": 12, "blocked_fraction": 0.25,
+                    "first_hit_objects": {"Sofa": 12, "Wall": 8},
+                    "mean_blocker_gap": 0.4, "max_allowed_gap": 0.8,
+                    "blocker_width_ratio": 0.3}
+        self.assertTrue(local_occlusion_passes(evidence, candidate_probe=True))
+        self.assertFalse(local_occlusion_passes(evidence, candidate_probe=False))
+        evidence["first_hit_objects"]["Wall"] = 20
+        self.assertFalse(local_occlusion_passes(evidence, candidate_probe=True))
 
     def test_plan_and_computed_answers(self):
         p = read_plan(self.path)
@@ -198,7 +215,7 @@ class PipelineTests(unittest.TestCase):
                     for level in ("simple", "medium", "hard")]
         plan = {"workflow_version": "candidate_probe_v1", "variants": json.loads(json.dumps(selected))}
         report = [{"candidate_id": v["candidate_id"],
-                   "probe_protocol_version": "landmark_surface_v2",
+                   "probe_protocol_version": "landmark_surface_v3",
                    "candidate_sha256": hashlib.sha256(json.dumps(
                        v, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
                    "recommended": [

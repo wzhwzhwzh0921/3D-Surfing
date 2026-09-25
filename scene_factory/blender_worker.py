@@ -12,6 +12,11 @@ import bpy
 from mathutils import Matrix, Vector
 from mathutils.bvhtree import BVHTree
 
+# Blender executes this file directly; expose sibling policy module without
+# relying on the shell's current working directory.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from occlusion_policy import local_occlusion_passes
+
 
 def args():
     return sys.argv[sys.argv.index("--") + 1:]
@@ -172,11 +177,7 @@ def candidate_camera_options(variant, augmented, spawned, original_by_name, anch
                 occlusion[cid] = occlusion_evidence(camera, spawned[cid], names,
                                                     [original_by_name[n] for n in names], augmented)
         passing_blockers = {cid for cid, e in occlusion.items() if
-                            cid in hidden and e["samples"] >= 10 and
-                            e["blocked_fraction"] >= 0.35 and
-                            e["mean_blocker_gap"] is not None and
-                            e["mean_blocker_gap"] <= e["max_allowed_gap"] and
-                            e["blocker_width_ratio"] <= 0.45}
+                            cid in hidden and local_occlusion_passes(e, candidate_probe=True)}
         local_blocker_ok = (bool(passing_blockers) if variant["level"] == "medium" else
                             variant.get("anchor_query", {}).get("target_copy_id") in passing_blockers)
         anchor_ok = (variant["level"] != "hard" or
@@ -458,7 +459,7 @@ def build(source, out, plan_path, *, preview_only=False):
                 render(augmented, candidate_dir / f"start_{index}.png",
                        option["azimuth_deg"], option["elevation_deg"], 512)
             report.append({"candidate_id": candidate_id, "level": variant["level"],
-                           "probe_protocol_version": "landmark_surface_v2",
+                           "probe_protocol_version": "landmark_surface_v3",
                            "preview_resolution_px": 512,
                            "candidate_sha256": hashlib.sha256(json.dumps(
                                variant, ensure_ascii=False, sort_keys=True,

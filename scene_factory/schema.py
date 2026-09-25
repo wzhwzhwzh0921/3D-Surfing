@@ -58,7 +58,7 @@ def validate_selection(plan: dict, pool: dict, probe_report: list[dict]) -> None
         cid = variant.get("candidate_id")
         if cid not in by_id or cid not in reports or by_id[cid]["level"] != variant["level"]:
             raise ValueError(f"{variant['level']}: select one probed candidate of the same level")
-        if reports[cid].get("probe_protocol_version") != "landmark_surface_v2":
+        if reports[cid].get("probe_protocol_version") != "landmark_surface_v3":
             raise ValueError(f"{cid}: probe report uses an old camera protocol; run probe again")
         digest = hashlib.sha256(json.dumps(by_id[cid], ensure_ascii=False, sort_keys=True,
                                            separators=(",", ":")).encode()).hexdigest()
