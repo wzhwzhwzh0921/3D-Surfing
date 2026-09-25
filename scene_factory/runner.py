@@ -153,6 +153,14 @@ the question hard. Place at least one hidden copy in each tier. Choose an explic
 start camera so the answer is not directly available. All copies must be discoverable
 from a global orbit or from a focused, zoomed local view. Hard need not claim
 30 actions without blind test.
+Treat the start camera as a design variable: try other azimuth/elevation angles
+if the first view reveals the answer or hides the landmarks needed to understand
+the question. Prefer a start view that shows the scene and target landmark but
+withholds only the decisive evidence. Partial surface occlusion is fine when the
+answer-bearing features become clear from a reachable view; do not demand a fully
+unobstructed object. Difficulty is relative to this scene: meet each tier's
+observation and reasoning requirements without forcing a fixed action count or
+sacrificing readability to make every hard item equally hard.
 If fewer than TWO distinct, small, naturally repeatable native object categories
 exist, do not invent kinds such as whole buildings, walls, structural beams,
 ground or water merely to fill the quota. Instead write {work / 'unsuitable.json'}
