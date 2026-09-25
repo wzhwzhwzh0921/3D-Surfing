@@ -6,8 +6,9 @@ import hashlib
 import json
 from pathlib import Path
 from statistics import median
+import unicodedata
 
-from .supervisor import LEVELS
+from .supervisor import LEVELS, current_review
 
 
 TOOLS = frozenset({"focus_at", "zoom", "orbit", "move", "undo_view"})
@@ -59,9 +60,10 @@ def summarize_traces(paths: list[Path], runs_root: Path) -> dict:
         work = path.parent.parent
         for result in validation["results"]:
             key = (validation.get("scene_id") or work.name, result["level"])
-            manifests.setdefault(key, []).append((work, result))
+            manifests.setdefault(key, []).append((work, result, validation))
     valid = []
     rejected = {"invalid": [], "stale": []}
+    challenges = []
     for path in paths:
         try:
             trace = json.loads(path.read_text())
@@ -73,21 +75,47 @@ def summarize_traces(paths: list[Path], runs_root: Path) -> dict:
             continue
         candidates = manifests.get((trace.get("scene_id"), trace["level"]), [])
         current = False
-        for work, result in candidates:
+        matched = None
+        for work, result, validation in candidates:
             asset = work / "output" / trace["level"] / "scene.glb"
             if (result["question"] == trace.get("question") and
                     result["sha256"] == trace.get("asset_sha256") and
                     result["start_camera"] == trace.get("start_camera_blender") and
                     asset.is_file() and hashlib.sha256(asset.read_bytes()).hexdigest() == result["sha256"]):
                 current = True
+                matched = (work, result, validation)
                 break
         if current:
             valid.append(trace)
+            work, result, validation = matched
+            supervisor = current_review(work, validation)
+            verdict = ((supervisor or {}).get("tiers", {}).get(trace["level"], {}).get("verdict"))
+            flags = []
+            if verdict == "pass":
+                if trace["completion_status"] == "unsolved":
+                    flags.append("supervisor_pass_blind_unsolved")
+                elif trace["completion_status"] == "guessed":
+                    flags.append("supervisor_pass_blind_guessed")
+                elif not trace["actions"]:
+                    flags.append("supervisor_pass_zero_action_answer")
+            if trace["completion_status"] == "observed":
+                independent = unicodedata.normalize("NFKC", str(trace["answer"])).strip().casefold()
+                builder = unicodedata.normalize("NFKC", str(result["answer"]["value"])).strip().casefold()
+                if independent != builder:
+                    flags.append("blind_builder_answer_mismatch")
+            if flags:
+                challenges.append({"trace": str(path), "scene_id": trace["scene_id"],
+                                   "level": trace["level"], "supervisor_verdict": verdict,
+                                   "blind_completion": trace["completion_status"],
+                                   "successful_actions": len(trace["actions"]), "flags": flags})
         else:
             rejected["stale"].append(str(path))
     return {"render_protocol": "modelviewer_perspective_v1",
             "note": "Tool counts describe navigation; observed status and answers are self-reported, not correctness gold.",
             "input_traces": len(paths), "valid_traces": len(valid), "rejected": rejected,
+            "challenge_flags": challenges,
+            "challenge_counts": dict(sorted(Counter(flag for row in challenges
+                                                     for flag in row["flags"]).items())),
             "overall": _bucket(valid),
             "by_level": {level: _bucket([t for t in valid if t["level"] == level])
                          for level in LEVELS}}

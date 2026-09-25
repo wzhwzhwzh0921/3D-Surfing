@@ -16,4 +16,4 @@ sceneqa = "scene_factory.cli:main"
 include = ["scene_factory*"]
 
 [tool.setuptools.package-data]
-scene_factory = ["static/*.html"]
+scene_factory = ["static/*.html", "static/blind-agent/*.cjs", "static/blind-agent/*.json"]

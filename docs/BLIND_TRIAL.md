@@ -17,8 +17,32 @@ sceneqa blind-summarize --traces /data/blind-traces --runs-root /data/runs \
   --output /data/blind-summary.json
 ```
 
-摘要会排除格式错误及与当前题目、机位、GLB 不匹配的旧轨迹，按档位报告有效次数、观察后作答/猜测/未解比例、观察后作答的操作数中位数与 P90、零操作作答数，以及各工具调用次数。**这些仍不是答案准确率或独立的场景数**；同一资产的重复试验会单独显示 `unique_assets`。要判断题目是否真的达到三档标准，需要由另一名审核者核对独立答案和轨迹中的决定性证据。
+摘要会排除格式错误及与当前题目、机位、GLB 不匹配的旧轨迹，按档位报告有效次数、观察后作答/猜测/未解比例、观察后作答的操作数中位数与 P90、零操作作答数，以及各工具调用次数。`challenge_flags` 还会列出与当前监督报告或生成器答案冲突的个案，例如“监督通过但盲解未解”“监督通过但只能猜”“零操作就作答”“独立答案与生成器答案不同”。这些都是**待复核线索，不是自动判错或答案准确率**；同一资产的重复试验会单独显示 `unique_assets`。要判断题目是否真的达到三档标准，需要由另一名审核者核对独立答案和轨迹中的决定性证据。
 
 此页使用 `modelviewer_perspective_v1`：GLB 的起始方向映射自 Blender `start_camera`，但浏览器是透视投影，工厂起始 PNG 是正交投影，画幅和遮挡可能不同。因而盲测轨迹可以校准**浏览器导航协议**的难度，不能直接代替对 Blender 原始 `start.png` 的泄漏审核，也不能与其他渲染协议的操作数混算。官方 API 参考：[相机轨道与目标](https://modelviewer.dev/examples/stagingandcameras/)、[屏幕点拾取](https://modelviewer.dev/docs/#entrydocs-annotations-methods-positionAndNormalFromPoint)。
 
 本地 Chromium 冒烟已在 Low Poly House GLB 上验证加载、换焦、旋转、缩放、平移、退回上一视角、旧观察 ID 拒绝、空白拾取拒绝及导出/汇总 JSON。这只证明交互和记录路径能运行；没有真人或模型完成并核对题目答案。
+
+## 让模型自主盲解
+
+仓库提供同一浏览器协议的 `blind-run`。它给模型的只有题干、当前 RGB 截图、观察 ID、回退可用次数，以及五个相机工具和 `submit_answer`；浏览器桥不接受任意 JavaScript、DOM 查询或文件读取。模型每轮最多执行一个工具，成功操作后收到新的截图。没有固定轮数上限，只有 `--max-seconds` 截止和连续八次无有效操作的停滞保护。
+
+首次在该环境运行需安装 Node 侧 Playwright，并准备 Chromium：
+
+```bash
+npm ci --prefix scene_factory/static/blind-agent
+cd scene_factory/static/blind-agent && npx playwright install chromium && cd ../../..
+```
+
+然后使用 TokenHub 或兼容的 Chat Completions 接口；密钥可放在已有的 `TOKENHUB_API_KEY` 环境变量或仅本机可读的 `--key-file` 中：
+
+```bash
+sceneqa blind-run --work /data/runs/scene-id --level medium \
+  --output /data/blind-runs/scene-id-medium \
+  --model deepseek/deepseek-flash --key-file /secure/tokenhub.env \
+  --max-seconds 900
+```
+
+每次请求的 `max_completion_tokens` 为 65536；429/5xx 有重试，`usage.jsonl` 和 `summary.json` 保留模型用量、缓存命中与重试次数。`observations/` 是模型实际收到的逐帧截图，`actions.jsonl` 包含成功及失败的工具调用；只有模型通过 `submit_answer` 结束时才生成可供 `blind-summarize` 接收的 `blind-trace.json`。截止或停滞留下 `partial-trace.json` 供诊断，不会被算成“无法解答”的有效试验。`summary.json` 中 `accuracy_judged=false`，需要独立核对答案。
+
+本地假模型接口的端到端冒烟包含一次 429、两次成功 API 回复、一轮旋转和一次提交：浏览器产生了两张截图，模型请求保留 64k 上限；用量汇总记录 `cache_hit_rate=0.60`，生成的轨迹能通过 `blind-summarize`。这仅验证协议、重试、缓存统计与文件流，**尚无真实 DeepSeek/GLM 盲解结果**。

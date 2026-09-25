@@ -17,7 +17,8 @@ from .calibration import evaluate_labels, make_label_template
 from .audit_review import render_label_page
 from .blind_review import render_blind_trial
 from .blind_trace import summarize_traces
-from .runner import ROOT, blender, run_batch, run_one, supervise_existing
+from .blind_agent import run_blind_agent
+from .runner import ROOT, blender, provider_key, run_batch, run_one, supervise_existing
 from .question_types import QUESTION_TYPES, type_order
 from .suitability import screen
 from .schema import read_candidate_pool, read_plan, select_candidates
@@ -125,6 +126,14 @@ def parser() -> argparse.ArgumentParser:
                                help="Directory containing exported trial JSON files")
     blind_summary.add_argument("--runs-root", type=Path, required=True)
     blind_summary.add_argument("--output", type=Path)
+    blind_run = sub.add_parser("blind-run", help="Run a screenshot-only ReAct solver on one built tier")
+    blind_run.add_argument("--work", type=Path, required=True)
+    blind_run.add_argument("--level", choices=("simple", "medium", "hard"), required=True)
+    blind_run.add_argument("--output", type=Path, required=True)
+    blind_run.add_argument("--model", default="deepseek/deepseek-flash")
+    blind_run.add_argument("--endpoint", default="https://tokenhub.tencentmaas.com/v1/chat/completions")
+    blind_run.add_argument("--key-file", type=Path)
+    blind_run.add_argument("--max-seconds", type=int, default=900)
     preflight = sub.add_parser("preflight")
     preflight.add_argument("--inventory", type=Path, required=True)
     inspect = sub.add_parser("inspect")
@@ -251,6 +260,14 @@ def main() -> None:
                 a.output.parent.mkdir(parents=True, exist_ok=True)
                 a.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
             print(json.dumps(report, ensure_ascii=False, indent=2))
+        elif a.command == "blind-run":
+            key = provider_key("tokenhub", a.key_file) or os.getenv("OPENAI_API_KEY", "")
+            summary = run_blind_agent(work=a.work, level=a.level, output=a.output,
+                                      endpoint=a.endpoint, key=key, model=a.model,
+                                      max_seconds=a.max_seconds)
+            print(json.dumps(summary, ensure_ascii=False, indent=2))
+            if summary["status"] != "submitted":
+                sys.exit(1)
         elif a.command == "preflight":
             print(json.dumps(screen(json.loads(a.inventory.read_text())), ensure_ascii=False, indent=2))
         elif a.command == "inspect":

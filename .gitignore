@@ -5,6 +5,7 @@ __pycache__/
 .pytest_cache/
 build/
 *.egg-info/
+node_modules/
 *.pyc
 runs/
 *.glb

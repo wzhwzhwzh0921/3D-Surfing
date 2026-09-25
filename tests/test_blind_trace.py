@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from scene_factory.blind_review import render_blind_trial
 from scene_factory.blind_trace import summarize_traces
@@ -77,6 +78,17 @@ class BlindTraceTests(unittest.TestCase):
         self.assertEqual(report["by_level"]["simple"]["median_actions_observed"], 2)
         self.assertEqual(report["overall"]["tool_calls"], {"focus_at": 1, "orbit": 1})
         self.assertEqual(report["overall"]["unique_assets"], 1)
+
+    def test_challenge_flags_do_not_claim_a_gold_answer(self):
+        path = self.traces / "zero-action.json"
+        path.write_text(json.dumps(self.trace()))
+        with patch("scene_factory.blind_trace.current_review",
+                   return_value={"tiers": {"simple": {"verdict": "pass"}}}):
+            report = summarize_traces([path], self.root)
+        self.assertEqual(report["challenge_counts"], {
+            "blind_builder_answer_mismatch": 1,
+            "supervisor_pass_zero_action_answer": 1})
+        self.assertIn("not correctness gold", report["note"])
 
 
 if __name__ == "__main__":
