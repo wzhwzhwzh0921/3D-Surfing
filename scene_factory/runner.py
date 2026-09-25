@@ -493,9 +493,16 @@ def restore_attempt(work: Path, backup: Path) -> None:
             shutil.copy2(src, dst)
 
 
-def supervisor_score(review: dict) -> int:
-    return sum({"pass": 2, "review": 1, "revise": 0}[row["verdict"]]
-               for row in review["tiers"].values())
+def supervisor_verdict_changes(before: dict, after: dict) -> dict[str, list[str]]:
+    """Compare each question separately so one improvement cannot hide a regression."""
+    rank = {"revise": 0, "review": 1, "pass": 2}
+    changes = {"improved_levels": [], "regressed_levels": [], "unchanged_levels": []}
+    for level in ("simple", "medium", "hard"):
+        old = rank[before["tiers"][level]["verdict"]]
+        new = rank[after["tiers"][level]["verdict"]]
+        key = "improved_levels" if new > old else "regressed_levels" if new < old else "unchanged_levels"
+        changes[key].append(level)
+    return changes
 
 
 def repair_change_summary(before: dict, after: dict) -> dict[str, list[str]]:
@@ -586,11 +593,9 @@ def supervise_and_repair(work: Path, scene_id: str, state: dict, report: dict, *
                            "report": str(work / f"supervisor_round_{index}.json"),
                            "image_reads": reads, "usage": usage})
             if backup is not None:
-                pass_regressed = any(
-                    previous_review["tiers"][level]["verdict"] == "pass" and
-                    review["tiers"][level]["verdict"] != "pass"
-                    for level in ("simple", "medium", "hard"))
-                if pass_regressed or supervisor_score(review) <= supervisor_score(previous_review):
+                verdict_changes = supervisor_verdict_changes(previous_review, review)
+                rounds[-1]["verdict_changes"] = verdict_changes
+                if verdict_changes["regressed_levels"] or not verdict_changes["improved_levels"]:
                     try:
                         restore_attempt(work, backup)
                         state.update(previous_state)
@@ -602,7 +607,12 @@ def supervise_and_repair(work: Path, scene_id: str, state: dict, report: dict, *
                                                "error": f"{type(exc).__name__}: {exc}"}
                         return
                     state["status"] = "supervisor_rejected"
-                    state["supervisor"] = {"status": "repair_did_not_improve", "rounds": rounds}
+                    state["supervisor"] = {
+                        "status": ("repair_regressed" if verdict_changes["regressed_levels"]
+                                   else "repair_did_not_improve"),
+                        "rounds": rounds,
+                        "regressed_levels": verdict_changes["regressed_levels"],
+                    }
                     return
                 shutil.rmtree(backup)
                 backup = None

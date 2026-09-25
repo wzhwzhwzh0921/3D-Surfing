@@ -203,5 +203,22 @@ def evaluate_labels(labels: Path, runs_root: Path) -> dict:
         "additional_scenes_if_no_more_errors": max(0, needed - scene_total),
         "pilot_target_met": scene_total >= needed,
     }
+    # Every scene contributes at most one question to each difficulty. The
+    # pooled scene bound can look good while one tier has too few judged passes.
+    for level in LEVELS:
+        row = by_level[level]
+        level_total = row["supervisor_pass"]
+        level_errors = row["false_accept"]
+        level_needed = _passes_needed_if_no_more_errors(level_errors, target)
+        row["audit_quota"] = {
+            "independent_scenes_with_pass_and_gold": level_total,
+            "false_accept_wilson95_upper": _wilson_upper(level_errors, level_total),
+            "pilot_target_upper": target,
+            "minimum_scenes_if_no_more_errors": level_needed,
+            "additional_scenes_if_no_more_errors": max(0, level_needed - level_total),
+            "pilot_target_met": level_total >= level_needed,
+        }
+    counts["scene_cluster_audit"]["all_levels_target_met"] = all(
+        by_level[level]["audit_quota"]["pilot_target_met"] for level in LEVELS)
     counts["by_level"] = by_level
     return counts

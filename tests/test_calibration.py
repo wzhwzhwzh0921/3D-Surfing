@@ -69,6 +69,10 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(clustered["scenes_with_supervisor_pass_and_gold"], 1)
         self.assertEqual(clustered["scenes_with_any_false_accept"], 1)
         self.assertFalse(clustered["pilot_target_met"])
+        self.assertFalse(clustered["all_levels_target_met"])
+        self.assertGreater(report["by_level"]["simple"]["audit_quota"]["minimum_scenes_if_no_more_errors"], 35)
+        self.assertEqual(report["by_level"]["medium"]["audit_quota"]["additional_scenes_if_no_more_errors"], 34)
+        self.assertEqual(report["by_level"]["hard"]["audit_quota"]["additional_scenes_if_no_more_errors"], 35)
 
     def test_pilot_target_uses_independent_scene_count(self):
         self.assertEqual(_passes_needed_if_no_more_errors(0, 0.10), 35)
