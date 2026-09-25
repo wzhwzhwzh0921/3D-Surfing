@@ -90,6 +90,8 @@ cd /data/sceneqa-runs/<uid> && python3 -m http.server 8000
 
 可选的[独立监督与定点返修循环](docs/SUPERVISOR_LOOP.md)让只读图像的第二次模型调用逐题找缺陷，最多再做两轮定点返修与复审。默认关闭；运行前应在小规模人工审核样本上验证其误收率与成本。
 
+首轮审核可用 `sceneqa audit-sample` 按来源难度和室内/室外分类抽样，再用 `sceneqa batch --dry-run` 生成原场景预览，最后用 `sceneqa audit-gallery` 汇总四视角。仓库保存了[20 场景抽样与预检记录](docs/AUDIT_PILOT_2026-09-26.md)；这些场景已验证可下载和渲染，尚未生成三档问答，也未经过人工入库审核。
+
 若改用 Codex Sol 逐场景手工调用，使用[单场景任务模板](docs/CODEX_SOL_TASK.md)，每次替换源 GLB、工作目录和仓库路径；该模板包含相同的反捷径与视觉复核要求。
 
 实际试跑和失败案例见 [验证记录](docs/SMOKE_TEST_2026-09-24.md)。旧版 `1.2` 已完成真实 GLB 的 DeepSeek 单会话交付；新版 `1.3` 的三档构建/校验和 DeepSeek 独立看图作答分别测过，但**新版全流程单会话尚未成功跑通**，不应按生产稳定性看待。

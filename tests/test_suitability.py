@@ -1,6 +1,11 @@
 import unittest
+from pathlib import Path
+import json
+import tempfile
+from unittest.mock import patch
 
 from scene_factory.suitability import screen
+from scene_factory.runner import ROOT, run_one
 
 
 class SuitabilityTests(unittest.TestCase):
@@ -11,6 +16,7 @@ class SuitabilityTests(unittest.TestCase):
         result = screen({"meshes": [{"name": n} for n in names]})
         self.assertEqual(result["status"], "likely_unsuitable")
         self.assertEqual(result["named_prop_categories"], ["barrel"])
+        self.assertFalse(result["definitive"])
 
     def test_generic_names_are_not_rejected(self):
         result = screen({"meshes": [{"name": "Cube.001"}, {"name": "Cube.002"},
@@ -35,6 +41,25 @@ class SuitabilityTests(unittest.TestCase):
         result = screen(inventory)
         self.assertEqual(result["status"], "likely_unsuitable")
         self.assertEqual(result["small_mesh_count"], 0)
+        self.assertTrue(result["definitive"])
+
+    def test_name_only_warning_does_not_auto_reject_before_agent(self):
+        source = ROOT / "examples/fixtures/hidden.glb"
+
+        def inspect(_mode, _source, output, _plan=None):
+            output.mkdir(parents=True)
+            (output / "inventory.json").write_text(json.dumps({"meshes": []}))
+
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch("scene_factory.runner.blender", side_effect=inspect), \
+             patch("scene_factory.runner.provider_key", return_value=""), \
+             patch("scene_factory.runner.screen", return_value={
+                 "status": "likely_unsuitable", "definitive": False,
+                 "rule": "fewer than two named kinds", "named_prop_categories": []}):
+            result = run_one({"uid": "warning"}, Path(tmp), source_path=source)
+            self.assertEqual(result["status"], "failed")
+            self.assertIn("No tokenhub key", result["error"])
+            self.assertFalse((Path(tmp) / "warning/unsuitable.json").exists())
 
 
 if __name__ == "__main__":

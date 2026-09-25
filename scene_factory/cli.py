@@ -11,6 +11,8 @@ import shutil
 import sys
 
 from .download import glb_header
+from .audit_sample import write_sample
+from .audit_gallery import render_audit_gallery
 from .runner import ROOT, blender, run_batch, run_one, supervise_existing
 from .question_types import QUESTION_TYPES, type_order
 from .suitability import screen
@@ -94,6 +96,16 @@ def parser() -> argparse.ArgumentParser:
     listing.add_argument("--catalog", type=Path, default=ROOT / "catalog/qualified.jsonl")
     listing.add_argument("--tier", choices=["simple", "complex"])
     listing.add_argument("--limit", type=int, default=20)
+    audit = sub.add_parser("audit-sample", help="Select a balanced pilot for human review")
+    audit.add_argument("--catalog", type=Path, default=ROOT / "catalog/qualified.jsonl")
+    audit.add_argument("--output", type=Path, required=True)
+    audit.add_argument("--per-tier", type=int, default=10)
+    audit.add_argument("--seed", type=int, default=0)
+    audit.add_argument("--max-bytes", type=int, default=100_000_000)
+    audit_gallery = sub.add_parser("audit-gallery", help="Show source previews for an audit sample")
+    audit_gallery.add_argument("--catalog", type=Path, required=True)
+    audit_gallery.add_argument("--runs-root", type=Path, required=True)
+    audit_gallery.add_argument("--output", type=Path, required=True)
     preflight = sub.add_parser("preflight")
     preflight.add_argument("--inventory", type=Path, required=True)
     inspect = sub.add_parser("inspect")
@@ -191,6 +203,13 @@ def main() -> None:
                 rows = [r for r in rows if r["tier"] == a.tier]
             for r in rows[:a.limit]:
                 print(json.dumps(r, ensure_ascii=False))
+        elif a.command == "audit-sample":
+            print(json.dumps(write_sample(a.catalog, a.output, per_tier=a.per_tier,
+                                          seed=a.seed, max_bytes=a.max_bytes),
+                             ensure_ascii=False, indent=2))
+        elif a.command == "audit-gallery":
+            print(json.dumps(render_audit_gallery(a.catalog, a.runs_root, a.output),
+                             ensure_ascii=False, indent=2))
         elif a.command == "preflight":
             print(json.dumps(screen(json.loads(a.inventory.read_text())), ensure_ascii=False, indent=2))
         elif a.command == "inspect":

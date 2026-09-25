@@ -56,6 +56,7 @@ def screen(inventory: dict) -> dict:
     status = ("likely_unsuitable" if geometry_reject or len(categories) < 2 and not generic
               else "needs_agent_review")
     return {"status": status, "named_prop_categories": categories,
+            "definitive": geometry_reject,
             "generic_mesh_count": len(generic), "mesh_count": len(names),
             "small_mesh_count": len(small),
             "small_mesh_examples": small[:20],

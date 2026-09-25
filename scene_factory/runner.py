@@ -701,7 +701,9 @@ def run_one(row: dict, output_root: Path, *, source_path: Path | None = None,
             preflight_report = screen(json.loads((inspect / "inventory.json").read_text()))
             state["preflight"] = preflight_report
             (work / "preflight.json").write_text(json.dumps(preflight_report, ensure_ascii=False, indent=2))
-            if preflight_report["status"] == "likely_unsuitable":
+            # Names alone cannot prove that no usable prop exists. Only the
+            # geometric absence of two individually copyable meshes is a gate.
+            if preflight_report["status"] == "likely_unsuitable" and preflight_report["definitive"]:
                 unsuitable = {"status": "unsuitable", "source": "deterministic_name_screen",
                               "reasons": [preflight_report["rule"]],
                               "available_native_categories": preflight_report["named_prop_categories"]}
