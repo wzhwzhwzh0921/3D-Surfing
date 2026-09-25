@@ -15,9 +15,11 @@ cd /data/runs && python3 -m http.server 8000
 ```bash
 sceneqa blind-summarize --traces /data/blind-traces --runs-root /data/runs \
   --output /data/blind-summary.json
+sceneqa blind-gallery --traces /data/blind-traces --runs-root /data/runs \
+  --output /data/blind-runs/challenges.html
 ```
 
-摘要会排除格式错误及与当前题目、机位、GLB 不匹配的旧轨迹，按档位报告有效次数、观察后作答/猜测/未解比例、观察后作答的操作数中位数与 P90、零操作作答数，以及各工具调用次数。`challenge_flags` 还会列出与当前监督报告或生成器答案冲突的个案，例如“监督通过但盲解未解”“监督通过但只能猜”“零操作就作答”“独立答案与生成器答案不同”。这些都是**待复核线索，不是自动判错或答案准确率**；同一资产的重复试验会单独显示 `unique_assets`。要判断题目是否真的达到三档标准，需要由另一名审核者核对独立答案和轨迹中的决定性证据。
+摘要会读取目录第一层的手动导出 JSON，以及子目录中 `blind-run` 完成后生成的 `blind-trace.json`；超时/停滞的 `partial-trace.json` 不计入有效试验。它排除格式错误及与当前题目、机位、GLB 不匹配的旧轨迹，按档位报告有效次数、观察后作答/猜测/未解比例、观察后作答的操作数中位数与 P90、零操作作答数，以及各工具调用次数。`challenge_flags` 还会列出与当前监督报告或生成器答案冲突的个案，例如“监督通过但盲解未解”“监督通过但只能猜”“零操作就作答”“独立答案与生成器答案不同”。`blind-gallery` 将这些有效冲突逐题呈现，含当前 GLB、Blender 起始图、盲解动作和现存的逐帧截图，并提示应核对机位、目标可达性、题干或答案。生成页面与 GLB/截图需要在同一个本地 HTTP 服务可访问的路径下。这些都是**待复核线索，不是自动判错或答案准确率**；同一资产的重复试验会单独显示 `unique_assets`。要判断题目是否真的达到三档标准，需要由另一名审核者核对独立答案和轨迹中的决定性证据。
 
 此页使用 `modelviewer_perspective_v1`：GLB 的起始方向映射自 Blender `start_camera`，但浏览器是透视投影，工厂起始 PNG 是正交投影，画幅和遮挡可能不同。因而盲测轨迹可以校准**浏览器导航协议**的难度，不能直接代替对 Blender 原始 `start.png` 的泄漏审核，也不能与其他渲染协议的操作数混算。官方 API 参考：[相机轨道与目标](https://modelviewer.dev/examples/stagingandcameras/)、[屏幕点拾取](https://modelviewer.dev/docs/#entrydocs-annotations-methods-positionAndNormalFromPoint)。
 

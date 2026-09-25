@@ -6,7 +6,8 @@ import unittest
 from unittest.mock import patch
 
 from scene_factory.blind_review import render_blind_trial
-from scene_factory.blind_trace import summarize_traces
+from scene_factory.blind_trace import discover_trace_paths, summarize_traces
+from scene_factory.challenge_gallery import render_challenge_gallery
 
 
 class BlindTraceTests(unittest.TestCase):
@@ -89,6 +90,38 @@ class BlindTraceTests(unittest.TestCase):
             "blind_builder_answer_mismatch": 1,
             "supervisor_pass_zero_action_answer": 1})
         self.assertIn("not correctness gold", report["note"])
+
+    def test_discovers_nested_completed_runs_but_not_partial_traces(self):
+        manual = self.traces / "manual.json"
+        manual.write_text(json.dumps(self.trace()))
+        run = self.traces / "case_a-simple"
+        run.mkdir()
+        completed = run / "blind-trace.json"
+        completed.write_text(json.dumps(self.trace()))
+        (run / "partial-trace.json").write_text(json.dumps(self.trace(status="unsolved")))
+        (run / "summary.json").write_text("{}")
+        self.assertEqual(discover_trace_paths(self.traces), sorted([manual, completed]))
+        report = summarize_traces(discover_trace_paths(self.traces), self.root)
+        self.assertEqual(report["valid_traces"], 2)
+
+    def test_challenge_gallery_shows_bound_actions_and_escapes_answers(self):
+        run = self.traces / "agent-run"
+        frames = run / "observations"
+        frames.mkdir(parents=True)
+        (frames / "frame_0001.png").write_bytes(b"first frame")
+        (frames / "frame_0002.png").write_bytes(b"second frame")
+        (self.work / "output/simple/start.png").write_bytes(b"start frame")
+        action = {"tool": "orbit", "args": {"yaw": 35, "pitch": 0},
+                  "before_observation_id": "frame_0001", "after_observation_id": "frame_0002"}
+        (run / "blind-trace.json").write_text(json.dumps(self.trace(
+            actions=[action], answer="<img onerror=alert(1)>")))
+        output = self.root / "challenge.html"
+        result = render_challenge_gallery(self.traces, self.root, output)
+        page = output.read_text()
+        self.assertEqual(result["challenges"], 1)
+        self.assertIn("observations/frame_0002.png", page)
+        self.assertIn("盲解答案", page)
+        self.assertNotIn("<img onerror=alert(1)>", page)
 
 
 if __name__ == "__main__":

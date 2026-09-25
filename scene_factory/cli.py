@@ -16,7 +16,8 @@ from .audit_gallery import render_audit_gallery
 from .calibration import evaluate_labels, make_label_template
 from .audit_review import render_label_page
 from .blind_review import render_blind_trial
-from .blind_trace import summarize_traces
+from .blind_trace import discover_trace_paths, summarize_traces
+from .challenge_gallery import render_challenge_gallery
 from .blind_agent import run_blind_agent
 from .runner import ROOT, blender, provider_key, run_batch, run_one, supervise_existing
 from .question_types import QUESTION_TYPES, type_order
@@ -123,9 +124,13 @@ def parser() -> argparse.ArgumentParser:
     blind_review.add_argument("--output", type=Path, required=True)
     blind_summary = sub.add_parser("blind-summarize", help="Summarize bound blind exploration traces")
     blind_summary.add_argument("--traces", type=Path, required=True,
-                               help="Directory containing exported trial JSON files")
+                               help="Trace JSON or directory with exported trials and nested blind-run outputs")
     blind_summary.add_argument("--runs-root", type=Path, required=True)
     blind_summary.add_argument("--output", type=Path)
+    blind_gallery = sub.add_parser("blind-gallery", help="Visual triage of current blind-trial conflicts")
+    blind_gallery.add_argument("--traces", type=Path, required=True)
+    blind_gallery.add_argument("--runs-root", type=Path, required=True)
+    blind_gallery.add_argument("--output", type=Path, required=True)
     blind_run = sub.add_parser("blind-run", help="Run a screenshot-only ReAct solver on one built tier")
     blind_run.add_argument("--work", type=Path, required=True)
     blind_run.add_argument("--level", choices=("simple", "medium", "hard"), required=True)
@@ -255,11 +260,14 @@ def main() -> None:
             print(json.dumps(render_blind_trial(a.work, a.level, a.output),
                              ensure_ascii=False, indent=2))
         elif a.command == "blind-summarize":
-            report = summarize_traces(sorted(a.traces.glob("*.json")), a.runs_root)
+            report = summarize_traces(discover_trace_paths(a.traces), a.runs_root)
             if a.output:
                 a.output.parent.mkdir(parents=True, exist_ok=True)
                 a.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
             print(json.dumps(report, ensure_ascii=False, indent=2))
+        elif a.command == "blind-gallery":
+            print(json.dumps(render_challenge_gallery(a.traces, a.runs_root, a.output),
+                             ensure_ascii=False, indent=2))
         elif a.command == "blind-run":
             key = provider_key("tokenhub", a.key_file) or os.getenv("OPENAI_API_KEY", "")
             summary = run_blind_agent(work=a.work, level=a.level, output=a.output,

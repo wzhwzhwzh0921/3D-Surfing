@@ -15,6 +15,18 @@ TOOLS = frozenset({"focus_at", "zoom", "orbit", "move", "undo_view"})
 COMPLETIONS = frozenset({"observed", "guessed", "unsolved"})
 
 
+def discover_trace_paths(location: Path) -> list[Path]:
+    """Read exported manual traces and nested completed blind-run outputs."""
+    if location.is_file():
+        return [location]
+    if not location.is_dir():
+        raise FileNotFoundError(f"Blind trace location does not exist: {location}")
+    manual = {path for path in location.glob("*.json")
+              if path.name not in {"summary.json", "partial-trace.json"}}
+    completed = set(location.rglob("blind-trace.json"))
+    return sorted(manual | completed)
+
+
 def _valid_trace(trace: dict) -> bool:
     actions = trace.get("actions")
     if (trace.get("schema_version") != "sceneqa_blind_trial_v1" or
@@ -105,6 +117,7 @@ def summarize_traces(paths: list[Path], runs_root: Path) -> dict:
                     flags.append("blind_builder_answer_mismatch")
             if flags:
                 challenges.append({"trace": str(path), "scene_id": trace["scene_id"],
+                                   "work_rel": str(work.relative_to(root)),
                                    "level": trace["level"], "supervisor_verdict": verdict,
                                    "blind_completion": trace["completion_status"],
                                    "successful_actions": len(trace["actions"]), "flags": flags})
