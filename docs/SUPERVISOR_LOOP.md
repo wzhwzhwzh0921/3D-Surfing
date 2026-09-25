@@ -50,3 +50,5 @@ sceneqa audit-gallery --catalog /data/audit-20.jsonl \
 `--exclude-catalog` 可重复给多个旧波次；新波次会排除旧场景及其作者，保持每波的来源配额。仓库保存了一个已排除首轮的[第二轮 20 场景名单](../catalog/audit-pilot-wave2-2026-09-26.jsonl)，尚未验证下载或可增强性。`audit-evaluate` 的 `scene_cluster_audit` 给出已获得人工 gold 且被监督者通过的独立场景数、含误收的场景数、Wilson 上界，以及**假设今后不再出现误收**时还需多少个有效场景。这个“追加数”是乐观下限，不是保证拿到这么多新源场景就能停；不适合增强、未完成审核或监督者弃判的场景都不进入分母。
 
 [本地验证记录](SUPERVISOR_SMOKE.md)区分了已经通过的程序测试和仍需真实 API/人工样本验证的部分。
+
+一次[Low Poly House 返修试验](LOWPOLY_REPAIR_EXPERIMENT_2026-09-26.md)展示了机位优化的典型冲突：地标更清楚的角度也可能露出答案，导致结构验证拒收；还发现题干把透明玻璃茶几误称为木茶几。返修提示因此要求机位和遮挡在同一张起始图上重新探测，并核对材质词。

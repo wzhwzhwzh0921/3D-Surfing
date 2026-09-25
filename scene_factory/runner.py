@@ -240,6 +240,9 @@ QUESTION QUALITY AUDIT (apply separately to all three variants, not just verify)
    must pick one chair and one spatial side; 'faces the van' must be unambiguous
    from an accessible view. For nearest-anchor questions, the visually chosen
    anchor must match the intended one and the second step must still be needed.
+   Verify every visible color or material adjective in the question against
+   rendered pixels, not mesh names: a mesh called "wood table" may render as
+   transparent glass. If an adjective is wrong, correct the wording and re-probe.
 4. Ask whether the copied object looks natural at its final position and whether
    the question has one stable answer. A numerical visibility/occlusion gate is
    necessary but not a semantic pass. If a tier remains ambiguous, revise it;
@@ -291,7 +294,10 @@ from a global orbit or from a focused, zoomed local view. Hard need not claim
 Treat the start camera as a design variable: try other azimuth/elevation angles
 if the first view reveals the answer or hides the landmarks needed to understand
 the question. Prefer a start view that shows the scene and target landmark but
-withholds only the decisive evidence. Partial surface occlusion is fine when the
+withholds only the decisive evidence. Re-probe the SAME view for both landmark
+readability and answer concealment: a clearer landmark angle can expose the
+target. If no angle satisfies both, move the target or change the candidate
+question instead of keeping a camera-only repair. Partial surface occlusion is fine when the
 answer-bearing features become clear from a reachable view; do not demand a fully
 unobstructed object. Difficulty is relative to this scene: meet each tier's
 observation and reasoning requirements without forcing a fixed action count or

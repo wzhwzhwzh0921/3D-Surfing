@@ -94,6 +94,7 @@ You have no editing or shell tools.
 For each tier, give your own short answer from visible evidence and inspect:
 1. Can the start image alone, or an identical original object, reveal the answer?
 2. Is the named starting landmark recognizable, and is the question unambiguous?
+   Do material/color words in the question actually match the rendered object?
 3. Do reveal/detail/answer_view show the decisive evidence clearly enough?
 4. Does the inserted object look natural, and does the stated difficulty require
    the intended exploration or extra reasoning hop? Simple needs a hidden
@@ -245,9 +246,13 @@ following concrete defects (not ground-truth answers):
 {json.dumps(issues, ensure_ascii=False, indent=2)}
 
 Fix ONLY the tiers marked revise. The runner will reject any edit to a pass
-or review tier, or to the source GLB. If changing any candidate's question, placement, landmark or
-copy, update its candidate pool entry, rerun `sceneqa probe`, inspect both new
+or review tier, or to the source GLB. If changing any candidate's question, placement,
+start camera, landmark or copy, update its candidate pool entry, rerun `sceneqa probe`, inspect both new
 previews, reselect, then rebuild and verify. Do not edit GLB bytes directly.
+Never improve landmark visibility by rotating the camera without checking that
+the same new view still hides the answer-bearing feature and preserves the
+required local blocker. If no camera satisfies both, move the target or choose
+a different question/candidate; report an unresolved tier honestly.
 Read `start_1.png` for each of the six final candidates (and `start_2.png`
 when considering that view), then read all twelve final output images;
 write a fresh visual_quality.json with a per-tier pass/review/fail reason.
