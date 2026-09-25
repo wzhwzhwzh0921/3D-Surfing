@@ -560,6 +560,7 @@ def supervise_and_repair(work: Path, scene_id: str, state: dict, report: dict, *
     """Challenge images in a separate context, then repair only concrete failures."""
     rounds = []
     state["supervisor"] = {"status": "running", "rounds": rounds,
+                           "active_round": None,
                            "max_repairs": max_repairs,
                            "model": supervisor_model or model}
     backup = None
@@ -588,11 +589,13 @@ def supervise_and_repair(work: Path, scene_id: str, state: dict, report: dict, *
                         preserve_backup = True
                         state["status"] = "failed"
                         state["supervisor"] = {"status": "rollback_failed", "rounds": rounds,
+                                               "active_round": None,
                                                "backup": str(backup),
                                                "error": f"{type(restore_exc).__name__}: {restore_exc}"}
                         return
                 state["status"] = "supervisor_needs_review"
                 state["supervisor"] = {"status": "invalid_review", "rounds": rounds,
+                                       "active_round": (index - 1 if backup is not None else None),
                                        "error": f"{type(exc).__name__}: {exc}"}
                 return
             review["artifact_sha256"] = {r["level"]: r.get("sha256")
@@ -615,6 +618,7 @@ def supervise_and_repair(work: Path, scene_id: str, state: dict, report: dict, *
                         preserve_backup = True
                         state["status"] = "failed"
                         state["supervisor"] = {"status": "rollback_failed", "rounds": rounds,
+                                               "active_round": None,
                                                "backup": str(backup),
                                                "error": f"{type(exc).__name__}: {exc}"}
                         return
@@ -623,11 +627,13 @@ def supervise_and_repair(work: Path, scene_id: str, state: dict, report: dict, *
                         "status": ("repair_regressed" if verdict_changes["regressed_levels"]
                                    else "repair_did_not_improve"),
                         "rounds": rounds,
+                        "active_round": index - 1,
                         "regressed_levels": verdict_changes["regressed_levels"],
                     }
                     return
                 shutil.rmtree(backup)
                 backup = None
+            state["supervisor"]["active_round"] = index
             outcome = review_outcome(review)
             if outcome == "pass":
                 state["supervisor"]["status"] = "passed"
@@ -651,7 +657,8 @@ def supervise_and_repair(work: Path, scene_id: str, state: dict, report: dict, *
                          if review["tiers"][level]["verdict"] != "revise"}
             if any((work / name).is_symlink() for name in BACKUP_ITEMS):
                 state["status"] = "supervisor_needs_review"
-                state["supervisor"] = {"status": "repair_requires_regular_files", "rounds": rounds}
+                state["supervisor"] = {"status": "repair_requires_regular_files", "rounds": rounds,
+                                       "active_round": index}
                 return
             backup = Path(tempfile.mkdtemp(prefix=".supervisor_backup_", dir=work))
             try:
@@ -659,6 +666,7 @@ def supervise_and_repair(work: Path, scene_id: str, state: dict, report: dict, *
             except Exception as exc:
                 state["status"] = "supervisor_needs_review"
                 state["supervisor"] = {"status": "backup_failed", "rounds": rounds,
+                                       "active_round": index,
                                        "error": f"{type(exc).__name__}: {exc}"}
                 return
             try:
@@ -687,11 +695,13 @@ def supervise_and_repair(work: Path, scene_id: str, state: dict, report: dict, *
                     preserve_backup = True
                     state["status"] = "failed"
                     state["supervisor"] = {"status": "rollback_failed", "rounds": rounds,
+                                           "active_round": None,
                                            "backup": str(backup),
                                            "error": f"{type(restore_exc).__name__}: {restore_exc}"}
                     return
                 state["status"] = "supervisor_rejected"
                 state["supervisor"] = {"status": "repair_invalid", "rounds": rounds,
+                                       "active_round": index,
                                        "error": f"{type(exc).__name__}: {exc}"}
                 return
     finally:

@@ -201,6 +201,7 @@ class SupervisorTests(unittest.TestCase):
                                  max_repairs=1)
         self.assertEqual(state["status"], "supervisor_rejected")
         self.assertEqual(state["supervisor"]["status"], "repair_regressed")
+        self.assertEqual(state["supervisor"]["active_round"], 0)
         self.assertEqual(state["supervisor"]["regressed_levels"], ["simple"])
         self.assertEqual(state["supervisor"]["rounds"][1]["verdict_changes"]["regressed_levels"],
                          ["simple"])
@@ -228,6 +229,7 @@ class SupervisorTests(unittest.TestCase):
                                  key="dummy", model="dummy", upstream="dummy", timeout=30,
                                  max_repairs=1)
         self.assertEqual(state["status"], "supervisor_rejected")
+        self.assertEqual(state["supervisor"]["active_round"], 0)
         self.assertEqual(json.loads((self.work / "plan.json").read_text()), self.original_plan)
 
     def test_repair_must_preserve_passing_tiers(self):
@@ -369,6 +371,33 @@ class SupervisorTests(unittest.TestCase):
             render_report(self.work, page)
             self.assertNotIn("独立监督：pass", page.read_text())
         path.write_text(json.dumps(validation))
+
+    def test_rolled_back_review_is_not_selected_when_pixels_match(self):
+        rows = []
+        for level in LEVELS:
+            asset = f"GLB-{level}".encode()
+            (self.work / "output" / level / "scene.glb").write_bytes(asset)
+            rows.append({"level": level, "sha256": hashlib.sha256(asset).hexdigest(),
+                         "question": f"Question {level}?", "answer": {"value": level},
+                         "hidden_copy_ids_at_start": [], "all_copies_discoverable": True})
+        validation = {"status": "candidate", "results": rows}
+        (self.work / "output/validation.json").write_text(json.dumps(validation))
+        first = verdicts(medium="revise")
+        first["artifact_sha256"] = {row["level"]: row["sha256"] for row in rows}
+        first["evidence_sha256"] = evidence_hashes(self.work)
+        first["review_item_sha256"] = review_item_hashes(validation)
+        (self.work / "supervisor_round_0.json").write_text(json.dumps(first))
+        second = json.loads(json.dumps(first))
+        second["tiers"]["medium"]["verdict"] = "pass"
+        second["tiers"]["medium"].pop("repair_instruction")
+        (self.work / "supervisor_round_1.json").write_text(json.dumps(second))
+        (self.work / "status.json").write_text(json.dumps({
+            "status": "supervisor_rejected",
+            "supervisor": {"status": "repair_did_not_improve", "active_round": 0}}))
+        page = self.work / "review.html"
+        render_report(self.work, page)
+        self.assertIn("独立监督：revise", page.read_text())
+        self.assertEqual(page.read_text().count("独立监督：pass"), 2)
 
 
 if __name__ == "__main__":

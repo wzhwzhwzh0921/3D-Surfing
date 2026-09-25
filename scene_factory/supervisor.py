@@ -46,7 +46,22 @@ def current_review(work: Path, validation: dict) -> dict | None:
         items = review_item_hashes(validation)
     except (FileNotFoundError, KeyError, TypeError):
         return None
-    for path in sorted(work.glob("supervisor_round_*.json"), reverse=True):
+    status_path = work / "status.json"
+    if status_path.is_file():
+        try:
+            supervisor = json.loads(status_path.read_text()).get("supervisor", {})
+        except (OSError, ValueError):
+            return None
+        if "active_round" in supervisor:
+            active = supervisor["active_round"]
+            if type(active) is not int or active < 0:
+                return None
+            paths = [work / f"supervisor_round_{active}.json"]
+        else:
+            paths = sorted(work.glob("supervisor_round_*.json"), reverse=True)
+    else:
+        paths = sorted(work.glob("supervisor_round_*.json"), reverse=True)
+    for path in paths:
         try:
             review = json.loads(path.read_text())
         except (OSError, ValueError):
