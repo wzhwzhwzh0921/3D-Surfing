@@ -230,7 +230,7 @@ following concrete defects (not ground-truth answers):
 {json.dumps(issues, ensure_ascii=False, indent=2)}
 
 Fix ONLY the tiers marked revise. The runner will reject any edit to a pass
-tier or to the source GLB. If changing any candidate's question, placement, landmark or
+or review tier, or to the source GLB. If changing any candidate's question, placement, landmark or
 copy, update its candidate pool entry, rerun `sceneqa probe`, inspect both new
 previews, reselect, then rebuild and verify. Do not edit GLB bytes directly.
 Read `start_1.png` for each of the six final candidates (and `start_2.png`

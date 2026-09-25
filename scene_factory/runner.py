@@ -648,7 +648,7 @@ def supervise_and_repair(work: Path, scene_id: str, state: dict, report: dict, *
             prior_plan = read_plan(work / "plan.json")
             protected = {level: prior_plan["variants"][index]
                          for index, level in enumerate(("simple", "medium", "hard"))
-                         if review["tiers"][level]["verdict"] == "pass"}
+                         if review["tiers"][level]["verdict"] != "revise"}
             if any((work / name).is_symlink() for name in BACKUP_ITEMS):
                 state["status"] = "supervisor_needs_review"
                 state["supervisor"] = {"status": "repair_requires_regular_files", "rounds": rounds}
@@ -678,7 +678,7 @@ def supervise_and_repair(work: Path, scene_id: str, state: dict, report: dict, *
                 rounds[-1]["repair_changes"] = repair_change_summary(prior_plan, revised_plan)
                 for position, level in enumerate(("simple", "medium", "hard")):
                     if level in protected and revised_plan["variants"][position] != protected[level]:
-                        raise ValueError(f"Repair changed supervisor-passing tier: {level}")
+                        raise ValueError(f"Repair changed non-revise tier: {level}")
             except Exception as exc:
                 try:
                     restore_attempt(work, backup)

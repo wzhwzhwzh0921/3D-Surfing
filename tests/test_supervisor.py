@@ -252,6 +252,30 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(state["supervisor"]["status"], "repair_invalid")
         self.assertEqual(json.loads((self.work / "plan.json").read_text()), self.original_plan)
 
+    def test_repair_must_preserve_review_tiers_without_instructions(self):
+        def phase(work, **kwargs):
+            name = kwargs["stream_path"].name
+            if name.startswith("supervisor"):
+                write_review_stream(kwargs["stream_path"], work,
+                                    verdicts(simple="review", medium="revise"))
+            else:
+                changed = json.loads((work / "plan.json").read_text())
+                changed["variants"][0]["version"] = 1
+                (work / "plan.json").write_text(json.dumps(changed))
+                kwargs["stream_path"].write_text('{"type":"result","result":"done"}')
+            return {}
+
+        state = {"status": "candidate", "source": {}}
+        with patch("scene_factory.runner.run_model_phase", side_effect=phase), \
+             patch("scene_factory.runner.finalize_attempt", return_value=(validation_fixture(), "accepted", {})), \
+             patch("scene_factory.runner.read_plan", side_effect=lambda p: json.loads(p.read_text())):
+            supervise_and_repair(self.work, "scene", state, validation_fixture(), provider="tokenhub",
+                                 key="dummy", model="dummy", upstream="dummy", timeout=30,
+                                 max_repairs=1)
+        self.assertEqual(state["supervisor"]["status"], "repair_invalid")
+        self.assertIn("non-revise tier: simple", state["supervisor"]["error"])
+        self.assertEqual(json.loads((self.work / "plan.json").read_text()), self.original_plan)
+
     def test_repair_cannot_change_source_glb(self):
         def phase(work, **kwargs):
             name = kwargs["stream_path"].name
