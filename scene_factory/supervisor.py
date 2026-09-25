@@ -18,6 +18,28 @@ def evidence_hashes(work: Path) -> dict[str, str]:
         for level in LEVELS for view in VIEWS}
 
 
+def current_review(work: Path, validation: dict) -> dict | None:
+    """Return only a report bound to the current GLBs and image evidence."""
+    expected = {row["level"]: row["sha256"] for row in validation["results"]}
+    try:
+        actual = {level: hashlib.sha256(
+            (work / "output" / level / "scene.glb").read_bytes()).hexdigest()
+            for level in LEVELS}
+        if actual != expected:
+            return None
+        evidence = evidence_hashes(work)
+    except FileNotFoundError:
+        return None
+    for path in sorted(work.glob("supervisor_round_*.json"), reverse=True):
+        try:
+            review = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if review.get("artifact_sha256") == actual and review.get("evidence_sha256") == evidence:
+            return review
+    return None
+
+
 def review_prompt(work: Path, validation: dict) -> str:
     """Expose questions and pixels, but withhold the builder's proposed answers."""
     items = []

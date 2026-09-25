@@ -1,4 +1,5 @@
 import json
+import hashlib
 from contextlib import contextmanager
 from pathlib import Path
 import tempfile
@@ -251,8 +252,9 @@ class SupervisorTests(unittest.TestCase):
     def test_review_page_uses_only_report_matching_current_assets(self):
         rows = []
         for level in LEVELS:
-            (self.work / "output" / level / "scene.glb").write_bytes(b"GLB")
-            rows.append({"level": level, "sha256": level,
+            asset = f"GLB-{level}".encode()
+            (self.work / "output" / level / "scene.glb").write_bytes(asset)
+            rows.append({"level": level, "sha256": hashlib.sha256(asset).hexdigest(),
                          "question": f"Question {level}?",
                          "answer": {"value": level, "source": "model_visual"},
                          "hidden_copy_ids_at_start": [],
@@ -260,7 +262,7 @@ class SupervisorTests(unittest.TestCase):
         (self.work / "output/validation.json").write_text(
             json.dumps({"status": "candidate", "results": rows}))
         report = verdicts(medium="revise")
-        report["artifact_sha256"] = {level: level for level in LEVELS}
+        report["artifact_sha256"] = {row["level"]: row["sha256"] for row in rows}
         report["evidence_sha256"] = evidence_hashes(self.work)
         (self.work / "supervisor_round_0.json").write_text(json.dumps(report))
         page = self.work / "review.html"
@@ -271,6 +273,10 @@ class SupervisorTests(unittest.TestCase):
         render_report(self.work, page)
         self.assertEqual(page.read_text().count("独立监督：revise"), 1)
         (self.work / "output/medium/answer_view.png").write_bytes(b"different pixels")
+        render_report(self.work, page)
+        self.assertNotIn("独立监督：revise", page.read_text())
+        (self.work / "output/medium/answer_view.png").write_bytes(b"PNG fixture")
+        (self.work / "output/medium/scene.glb").write_bytes(b"changed GLB")
         render_report(self.work, page)
         self.assertNotIn("独立监督：revise", page.read_text())
 

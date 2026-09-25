@@ -13,11 +13,12 @@ import sys
 from .download import glb_header
 from .audit_sample import write_sample
 from .audit_gallery import render_audit_gallery
+from .calibration import evaluate_labels, make_label_template
 from .runner import ROOT, blender, run_batch, run_one, supervise_existing
 from .question_types import QUESTION_TYPES, type_order
 from .suitability import screen
 from .schema import read_candidate_pool, read_plan, select_candidates
-from .supervisor import evidence_hashes
+from .supervisor import current_review
 from .validate import validate
 
 
@@ -36,21 +37,7 @@ def render_report(work: Path, output: Path) -> None:
                        {"rejected": "visual_rejected", "needs_review": "visual_needs_review"}.get(
                            visual_status, validation["status"]))
     quality_tiers = visual_quality.get("tiers", {})
-    current_hashes = {row["level"]: row["sha256"] for row in validation["results"]}
-    supervisor_review = {}
-    current_evidence = None
-    for path in sorted(work.glob("supervisor_round_*.json"), reverse=True):
-        candidate = json.loads(path.read_text())
-        if candidate.get("artifact_sha256") != current_hashes:
-            continue
-        if current_evidence is None:
-            try:
-                current_evidence = evidence_hashes(work)
-            except FileNotFoundError:
-                break
-        if candidate.get("evidence_sha256") == current_evidence:
-            supervisor_review = candidate
-            break
+    supervisor_review = current_review(work, validation) or {}
     captions = {"reveal": "全景揭示视角", "detail": "单目标局部视角",
                 "answer_view": "按题型生成的同框证据"}
     cards = []
@@ -111,6 +98,14 @@ def parser() -> argparse.ArgumentParser:
     audit_gallery.add_argument("--catalog", type=Path, required=True)
     audit_gallery.add_argument("--runs-root", type=Path, required=True)
     audit_gallery.add_argument("--output", type=Path, required=True)
+    audit_template = sub.add_parser("audit-template", help="Export fingerprinted human QA labels")
+    audit_template.add_argument("--runs-root", type=Path, required=True)
+    audit_template.add_argument("--output", type=Path, required=True)
+    audit_template.add_argument("--force", action="store_true", help="Replace an existing label CSV")
+    audit_evaluate = sub.add_parser("audit-evaluate", help="Compare supervisor to human labels")
+    audit_evaluate.add_argument("--labels", type=Path, required=True)
+    audit_evaluate.add_argument("--runs-root", type=Path, required=True)
+    audit_evaluate.add_argument("--output", type=Path)
     preflight = sub.add_parser("preflight")
     preflight.add_argument("--inventory", type=Path, required=True)
     inspect = sub.add_parser("inspect")
@@ -215,6 +210,15 @@ def main() -> None:
         elif a.command == "audit-gallery":
             print(json.dumps(render_audit_gallery(a.catalog, a.runs_root, a.output),
                              ensure_ascii=False, indent=2))
+        elif a.command == "audit-template":
+            print(json.dumps(make_label_template(a.runs_root, a.output, overwrite=a.force),
+                             ensure_ascii=False, indent=2))
+        elif a.command == "audit-evaluate":
+            report = evaluate_labels(a.labels, a.runs_root)
+            if a.output:
+                a.output.parent.mkdir(parents=True, exist_ok=True)
+                a.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+            print(json.dumps(report, ensure_ascii=False, indent=2))
         elif a.command == "preflight":
             print(json.dumps(screen(json.loads(a.inventory.read_text())), ensure_ascii=False, indent=2))
         elif a.command == "inspect":
