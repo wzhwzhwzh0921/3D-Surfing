@@ -26,7 +26,7 @@ AGENT_SYSTEM = (
     "plan schema, and complete example as your interface. Decide suitability first. "
     "If fewer than two distinct native small-prop categories can be augmented "
     "naturally, write unsuitable.json and stop. Otherwise write plan.json promptly, "
-    "then invoke build, inspect all six reveal/detail images, write your own answers, "
+    "then invoke build, inspect all nine start/reveal/detail images, write your own answers, "
     "and verify; revise the plan if needed. Do not proactively call --help, "
     "inspect framework source, scan the filesystem, extract raw GLB textures, "
     "install packages, or write custom "
@@ -113,6 +113,30 @@ from the supplied/rendered views. If scattered or hidden originals make the tota
 ambiguous, choose a smaller named region or skip count rather than guessing.
 Use natural Chinese questions and keep three answers distinct.
 
+QUESTION QUALITY AUDIT (apply separately to all three variants, not just verify):
+1. Read each tier's start.png, reveal.png and detail.png after building. At the
+   start, can a solver answer from a visible target, a duplicate native prop,
+   the wording, or a general scene convention without moving the camera? If yes,
+   change the question, placement or start camera and rebuild. A hidden copy alone
+   does not prevent an answer shortcut: another identical chair can reveal its
+   color, and another identical lantern can make an identity question guessable.
+2. After orbiting/focusing, is the answer itself visually identifiable from the
+   revealed evidence? For identity, distinctive parts must be visible, not only
+   a generic body or the template object's mesh name. For color/texture, the
+   decisive surface must be visible under the actual scene lighting. For count,
+   the named region and all matching objects in it must be inspectable. Do not
+   use registry counts, copy IDs, object names or the planned template as proof
+   of what a solver can see. If uncertain, choose a clearer target or viewpoint.
+3. Check uniqueness of wording and location. A phrase like 'behind the chair'
+   must pick one chair and one spatial side; 'faces the van' must be unambiguous
+   from an accessible view. For nearest-anchor questions, the visually chosen
+   anchor must match the intended one and the second step must still be needed.
+4. Ask whether the copied object looks natural at its final position and whether
+   the question has one stable answer. A numerical visibility/occlusion gate is
+   necessary but not a semantic pass. If a tier remains ambiguous, revise it;
+   if no sound version exists for this scene, say so honestly in agent_notes.md
+   instead of calling the answer certain.
+
 DIFFICULTY: Simple gives a direct target but hides critical evidence at the start.
 Medium gives a direct target/anchor but requires overcoming VISUAL OCCLUSION:
 use at most two target copies, place at least one behind a nearby natural scene
@@ -137,14 +161,18 @@ and finish. This is an acceptable outcome for batch filtering.
 Your tools: Bash, Read, Write, Edit, Glob, Grep. You can call:
 {sys.executable} -m scene_factory.cli build --source {work / 'source.glb'} --plan {work / 'plan.json'} --output {work / 'output'}
 {sys.executable} -m scene_factory.cli verify --plan {work / 'plan.json'} --output {work / 'output'}
-After EACH build, Read output/simple/reveal.png and detail.png, and likewise for
-medium and hard. Reconsider each declared_answer from those images plus source
-previews, inventory and the explicit nearest-anchor geometry. Update plan.json
+After EACH build, Read output/simple/start.png, reveal.png and detail.png, and
+likewise for medium and hard. Reconsider each declared_answer from those images
+and visually audit shortcuts, uniqueness and naturalness. Use source previews,
+inventory and nearest-anchor geometry to plan placement, not to substitute for
+visual proof of the answer. Update plan.json
 if an answer or question wording changes, then run verify. If the model cannot
 see the detail well enough, change the plan/placement and rebuild; do not guess.
 Iterate the plan/build/verify inside this same session until verify succeeds.
 No second Claude session will be launched. Finally write {work / 'agent_notes.md'}
-with naturalness reasoning and any uncertainties. Do not assert an untested 30-step claim.
+with a brief per-tier audit: why the start cannot answer, which revealed view
+shows the answer, whether a duplicate or wording shortcut remains, and any
+uncertainty. Do not assert an untested 30-step claim.
 """
 
 
