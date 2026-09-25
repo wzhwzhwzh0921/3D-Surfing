@@ -52,7 +52,7 @@ def make_label_template(runs_root: Path, output: Path, *, overwrite: bool = Fals
                          "human_start_leak": "", "human_verdict": "", "human_answer": "",
                          "human_answer_correct": "", "human_note": ""})
     output.parent.mkdir(parents=True, exist_ok=True)
-    with output.open("w", newline="") as handle:
+    with output.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=FIELDS)
         writer.writeheader()
         writer.writerows(rows)
@@ -70,7 +70,7 @@ def _wilson_upper(errors: int, total: int) -> float | None:
 
 def evaluate_labels(labels: Path, runs_root: Path) -> dict:
     root = runs_root.resolve()
-    with labels.open(newline="") as handle:
+    with labels.open(encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
         if not REQUIRED_FIELDS <= set(reader.fieldnames or []):
             raise ValueError("Label CSV is missing required columns")
@@ -135,6 +135,7 @@ def evaluate_labels(labels: Path, runs_root: Path) -> dict:
             by_level[row["level"]]["start_leak_yes"] += 1
         if start_leak == "yes" and verdict == "pass":
             counts["human_inconsistent"] += 1
+            continue
         gold_bad = verdict == "fail" or correct == "no" or start_leak == "yes"
         gold_good = verdict == "pass" and correct == "yes"
         if not gold_bad and not gold_good:

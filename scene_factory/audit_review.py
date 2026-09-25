@@ -14,7 +14,7 @@ from .supervisor import LEVELS, VIEWS
 
 def render_label_page(labels: Path, runs_root: Path, output: Path) -> dict:
     root = runs_root.resolve()
-    with labels.open(newline="") as handle:
+    with labels.open(encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
         if not REQUIRED_FIELDS <= set(reader.fieldnames or []):
             raise ValueError("Label CSV is missing required columns")
@@ -81,7 +81,7 @@ def render_label_page(labels: Path, runs_root: Path, output: Path) -> dict:
 <style>body{font:16px system-ui;background:#eff2f5;color:#172532;margin:0 auto;max-width:1460px;padding:24px}
 h1{margin-bottom:6px}.toolbar{position:sticky;top:0;z-index:4;background:#eff2f5;padding:12px 0;
 display:flex;gap:16px;align-items:center;border-bottom:1px solid #ccd}button{cursor:pointer;padding:9px 14px;border:0;
-border-radius:8px;background:#174f88;color:white}main{display:grid;grid-template-columns:repeat(auto-fit,minmax(560px,1fr));gap:18px;margin-top:18px}
+border-radius:8px;background:#174f88;color:white}main{display:grid;grid-template-columns:1fr;gap:18px;max-width:1100px;margin-top:18px}
 article{background:white;border-radius:12px;padding:16px;box-shadow:0 2px 12px #0001}.card-head{display:flex;gap:12px;color:#486}
 h2{font-size:1.14rem}.first-look{max-width:380px}.first-look img{aspect-ratio:1}
 details.explore{margin-top:12px}summary{cursor:pointer;color:#174f88;font-weight:650;margin:10px 0}

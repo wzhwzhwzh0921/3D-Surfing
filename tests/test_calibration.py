@@ -80,6 +80,14 @@ class CalibrationTests(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             make_label_template(self.root, self.labels)
 
+    def test_browser_export_bom_is_accepted(self):
+        self._fill()
+        self.labels.write_bytes(b"\xef\xbb\xbf" + self.labels.read_bytes())
+        report = evaluate_labels(self.labels, self.root)
+        self.assertEqual(report["gold_binary"], 3)
+        page = self.root / "review.html"
+        self.assertEqual(render_label_page(self.labels, self.root, page)["questions"], 3)
+
     def test_legacy_answer_aware_supervisor_is_separate(self):
         self._fill()
         path = self.work / "supervisor_round_0.json"
@@ -107,6 +115,25 @@ class CalibrationTests(unittest.TestCase):
         report = evaluate_labels(self.labels, self.root)
         self.assertEqual(report["false_accept"], 1)
         self.assertEqual(report["start_leak_yes"], 1)
+
+    def test_conflicting_human_start_and_pass_is_excluded(self):
+        self._fill()
+        with self.labels.open(newline="") as handle:
+            reader = csv.DictReader(handle)
+            rows = list(reader)
+            fields = reader.fieldnames
+        simple = next(row for row in rows if row["level"] == "simple")
+        simple["human_verdict"] = "pass"
+        simple["human_answer_correct"] = "yes"
+        simple["human_start_leak"] = "yes"
+        with self.labels.open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(rows)
+        report = evaluate_labels(self.labels, self.root)
+        self.assertEqual(report["human_inconsistent"], 1)
+        self.assertEqual(report["start_leak_yes"], 1)
+        self.assertEqual(report["gold_binary"], 2)
 
     def test_label_path_cannot_escape_runs_root(self):
         with self.labels.open(newline="") as handle:
