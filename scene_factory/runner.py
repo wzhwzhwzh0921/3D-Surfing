@@ -27,7 +27,8 @@ AGENT_SYSTEM = (
     "If fewer than two distinct native small-prop categories can be augmented "
     "naturally, write unsuitable.json and stop. Otherwise write plan.json promptly, "
     "then invoke build, inspect all nine start/reveal/detail images, write your own answers, "
-    "and verify; revise the plan if needed. Do not proactively call --help, "
+    "and verify; revise the plan if needed. Write visual_quality.json after "
+    "the final visual self-review. Do not proactively call --help, "
     "inspect framework source, scan the filesystem, extract raw GLB textures, "
     "install packages, or write custom "
     "rendering scripts. If build or verify fails, inspect the concise error and "
@@ -95,6 +96,10 @@ No imported plush toys, props, color changes, invisible labels or unrelated deco
 Copy an object to natural physical support (table, shelf, floor, bench), usually behind
 existing occluders. Explicitly list all relevant ORIGINAL instances in entities;
 include every matching original, even hidden ones. Keep source geometry and materials.
+Before planning, check that the inventory contains at least two distinct small
+meshes that can be copied individually. Props visible in a preview but merged
+into a whole-house, vegetation or ground mesh do not count. Such an asset is
+unsuitable even if the picture looks richly furnished.
 QUESTION TYPES AND RANDOMIZATION: This scene's reproducible seed is {seed}.
 The randomized type order is: {menu}.
 Prefer the first THREE feasible types in that order, assign one to each difficulty
@@ -136,14 +141,34 @@ QUESTION QUALITY AUDIT (apply separately to all three variants, not just verify)
    necessary but not a semantic pass. If a tier remains ambiguous, revise it;
    if no sound version exists for this scene, say so honestly in agent_notes.md
    instead of calling the answer certain.
+5. For counts and comparisons, the answer view must show all relevant objects
+   and the named region together. A detail crop around only the first copy is
+   insufficient. For relative-position or direction questions, the answer view
+   must show the target, reference object and direction landmarks together;
+   world coordinates alone do not establish a visually answerable question.
+   If the supplied views cannot do this, redesign the question or report a
+   visual-quality failure rather than asserting an answer.
+6. Do not accept a start image dominated by a roof, enclosing shell or blank
+   background when the named landmarks shrink to a few pixels. Do not identify
+   a hidden prop from an undiagnostic fabric corner or generic silhouette.
+   Avoid low-contrast pairings such as transparent glasses on a glass tabletop;
+   if the objects cannot be counted or recognized in the rendered pixels,
+   their known mesh count and names cannot rescue the question.
+   For EACH tier, name where the question's primary landmark appears in start.png
+   and whether it is large enough to recognize. If you cannot point to it in
+   the actual image, change the start camera or question; hiding the target
+   cannot compensate for hiding the landmark needed to start exploring.
 
 DIFFICULTY: Simple gives a direct target but hides critical evidence at the start.
 Medium gives a direct target/anchor but requires overcoming VISUAL OCCLUSION:
 use at most two target copies, place at least one behind a nearby natural scene
 prop, and declare occlusion_targets with exact blocker mesh name(s). The builder raycasts target surface
 samples and requires at least 35% blocked by that named prop at the start view;
-the blocker must be small relative to the scene and close to the target, so a
-perimeter wall alone is not sufficient. Hard adds ONE REASONING HOP: first resolve
+   the blocker must be small relative to the scene and close to the target, so a
+   perimeter wall, floor slab or roof alone is not sufficient. Before committing
+   a start camera, inspect which mesh actually blocks the target ray; if the
+   floor/roof blocks first, rotate the camera or move the target rather than
+   naming a nearby chair or cabinet as the blocker. Hard adds ONE REASONING HOP: first resolve
 a unique nearest anchor from a named reference and at least two candidate scene
 objects, then move to that anchor and overcome local occlusion. Declare
 anchor_query with relation=nearest, reference_object, candidate_objects,
@@ -166,6 +191,9 @@ exist, do not invent kinds such as whole buildings, walls, structural beams,
 ground or water merely to fill the quota. Instead write {work / 'unsuitable.json'}
 with {{"status":"unsuitable","reasons":["..."],"available_native_categories":["..."]}}
 and finish. This is an acceptable outcome for batch filtering.
+Use unsuitable.json only for source-asset screening before a plan is built.
+If a built scene fails the visual audit, use visual_quality.json with status
+rejected instead; do not write unsuitable.json for that outcome.
 Your tools: Bash, Read, Write, Edit, Glob, Grep. You can call:
 {sys.executable} -m scene_factory.cli build --source {work / 'source.glb'} --plan {work / 'plan.json'} --output {work / 'output'}
 {sys.executable} -m scene_factory.cli verify --plan {work / 'plan.json'} --output {work / 'output'}
@@ -181,6 +209,14 @@ No second Claude session will be launched. Finally write {work / 'agent_notes.md
 with a brief per-tier audit: why the start cannot answer, which revealed view
 shows the answer, whether a duplicate or wording shortcut remains, and any
 uncertainty. Do not assert an untested 30-step claim.
+Also write {work / 'visual_quality.json'} after visual review in this form:
+{{"status":"accepted","tiers":{{"simple":{{"status":"pass","reason":"..."}},
+"medium":{{"status":"pass","reason":"..."}},
+"hard":{{"status":"pass","reason":"..."}}}}}}.
+If any tier fails the visual audit, set its status to fail and overall status
+to rejected. This is your own visual judgment, not automatic answer checking.
+Structural validation may still say candidate; never label a visually rejected
+scene as ready for the question bank.
 """
 
 
@@ -213,6 +249,27 @@ def observed_evidence_reads(stream_path: Path, work: Path) -> list[str]:
     return sorted(observed)
 
 
+def visual_quality_status(path: Path) -> tuple[str, dict | None]:
+    """Record the agent's visual self-review separately from structural validation."""
+    if not path.exists():
+        return "needs_review", None
+    quality = json.loads(path.read_text())
+    if quality.get("status") not in ("accepted", "rejected"):
+        raise ValueError("visual_quality.json status must be accepted or rejected")
+    tiers = quality.get("tiers")
+    if not isinstance(tiers, dict) or set(tiers) != {"simple", "medium", "hard"}:
+        raise ValueError("visual_quality.json must review all three tiers")
+    if any(not isinstance(tiers[level], dict) or
+           tiers[level].get("status") not in ("pass", "fail") or
+           not isinstance(tiers[level].get("reason"), str) or
+           not tiers[level]["reason"].strip()
+           for level in tiers):
+        raise ValueError("Each visual-quality tier needs a pass/fail status and reason")
+    if quality["status"] == "accepted" and any(tiers[level]["status"] == "fail" for level in tiers):
+        raise ValueError("visual_quality.json cannot accept a failed tier")
+    return ("visual_rejected" if quality["status"] == "rejected" else "accepted"), quality
+
+
 def run_one(row: dict, output_root: Path, *, source_path: Path | None = None,
             upstream: str | None = None, model: str | None = None, provider: str = "tokenhub",
             key_file: Path | None = None, preflight: bool = True,
@@ -221,19 +278,20 @@ def run_one(row: dict, output_root: Path, *, source_path: Path | None = None,
     work = (output_root / scene_id).resolve()
     output = work / "output"
     validation_path = output / "validation.json"
+    status_file = work / "status.json"
+    if status_file.exists() and not force:
+        old_status = json.loads(status_file.read_text())
+        if old_status.get("status") in ("unsuitable", "visual_rejected", "candidate", "needs_review"):
+            return {"scene_id": scene_id, "status": old_status["status"], "skipped": True,
+                    "work": str(work)}
     if validation_path.exists() and not force:
         old = json.loads(validation_path.read_text())
         if old.get("status") in ("candidate", "needs_review"):
             return {"scene_id": scene_id, "status": old["status"], "skipped": True,
                     "work": str(work)}
-    status_file = work / "status.json"
-    if status_file.exists() and not force:
-        old_status = json.loads(status_file.read_text())
-        if old_status.get("status") == "unsuitable":
-            return {"scene_id": scene_id, "status": "skipped_unsuitable", "work": str(work)}
     work.mkdir(parents=True, exist_ok=True)
-    if force:
-        (work / "unsuitable.json").unlink(missing_ok=True)
+    (work / "unsuitable.json").unlink(missing_ok=True)
+    (work / "visual_quality.json").unlink(missing_ok=True)
     state = {"scene_id": scene_id, "status": "running", "started": time.time(),
              "source": {k: row.get(k) for k in ("uid", "name", "tier", "category", "author", "license", "source_url", "download_url")}}
     status_file.write_text(json.dumps(state, ensure_ascii=False, indent=2))
@@ -314,6 +372,8 @@ def run_one(row: dict, output_root: Path, *, source_path: Path | None = None,
                 raise RuntimeError(f"Claude session failed with exit code {result.returncode}")
         unsuitable_path = work / "unsuitable.json"
         if unsuitable_path.exists():
+            if (work / "visual_quality.json").exists():
+                raise ValueError("unsuitable.json is only for pre-plan source screening; use visual_quality.json for built scenes")
             unsuitable = json.loads(unsuitable_path.read_text())
             if unsuitable.get("status") != "unsuitable" or not unsuitable.get("reasons"):
                 raise ValueError("unsuitable.json must contain status and reasons")
@@ -341,7 +401,10 @@ def run_one(row: dict, output_root: Path, *, source_path: Path | None = None,
         # Build/verify once more outside the agent session so agent claims are not trusted.
         blender("build", source, output, plan_path)
         report = validate(plan_path, output)
-        state["status"] = report["status"]
+        quality_status, quality = visual_quality_status(work / "visual_quality.json")
+        state["visual_quality"] = quality
+        state["status"] = (quality_status if report["status"] == "candidate" and
+                           quality_status != "accepted" else report["status"])
         state["completed"] = time.time()
     except subprocess.TimeoutExpired:
         state["status"] = "failed"

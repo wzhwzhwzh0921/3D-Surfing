@@ -34,7 +34,7 @@ sceneqa types --scene-id a450b90cb444431d93c6e4bab70fa233 --seed 0
 
 `.env` 不会自动加载，必须先 `source`；若 key 存在私有文件中，可用 `--key-file /private/path/key.txt`，支持纯 key 文件或包含 `TOKENHUB_API_KEY=` / `TENCENT_ENDPOINT_API_KEY=` 的 `.env`。不要把私有文件放进本仓库。
 
-`run` 支持 `--input-path` 本地 GLB 和 `--dry-run`，后者只做源资产预检和四张彩色预览，不调用模型。设置 `SCENEQA_QUESTION_SEED` 可改变可复现的题型顺序；模型可跳过不适合当前场景的题型，并在 `agent_notes.md` 说明原因。`batch` 默认一个 worker，最多四个，并按 `uid` 续跑：已有 `candidate` 或 `needs_review` 结果会跳过；失败项保留 `status.json`、日志和中间产物。源下载有大小上限（默认 100 MB）、SHA256、GLB v2 头检查、断点式缓存与 429/5xx 重试。批量运行可用 `--max-bytes` 调整上限。
+`run` 支持 `--input-path` 本地 GLB 和 `--dry-run`，后者只做源资产预检和四张彩色预览，不调用模型。设置 `SCENEQA_QUESTION_SEED` 可改变可复现的题型顺序；模型可跳过不适合当前场景的题型，并在 `agent_notes.md` 说明原因。`batch` 默认一个 worker，最多四个，并按 `uid` 续跑：已有 `candidate`、`needs_review` 或 `visual_rejected` 结果会跳过；失败项保留 `status.json`、日志和中间产物。源下载有大小上限（默认 100 MB）、SHA256、GLB v2 头检查、断点式缓存与 429/5xx 重试。批量运行可用 `--max-bytes` 调整上限。
 
 若原场景缺少至少两类可自然重复的小物件，或缺少困难题所需的两个可区分地标，agent 应生成 `unsuitable.json` 记录原因，批量结果标为 `unsuitable`，而不是复制房屋、横梁或地面凑题。目录筛选的“可下载、场景复杂度合适”不等同于“适合三道探索题”；这一判断也是正式入库前的人工复核项。
 
@@ -74,9 +74,13 @@ cd /data/sceneqa-runs/<uid> && python3 -m http.server 8000
 
 生成提示词还要求模型逐档查看 `start/reveal/detail.png` 并做语义自查：起始图及同款原物件是否泄露答案，揭示图是否清楚露出关键形状或颜色，题目指向的地标与方位是否唯一，以及复制件是否自然地落在场景里。发现捷径或歧义时，应修改题目、摆放或相机后重建，并在 `agent_notes.md` 记录每档的证据与残留疑点。这些是提示词要求，不是自动判真值；正式题库仍需人工审阅和盲测。
 
+模型还需写 `visual_quality.json`，逐档声明视觉自查是否通过并说明原因。若任一档失败，即使 `validation.json` 为结构性 `candidate`，批处理的 `status.json` 也标为 `visual_rejected`；缺少自查文件则标为 `needs_review`。这只是保留模型自己的看图结论，并不自动核验答案。
+
 若改用 Codex Sol 逐场景手工调用，使用[单场景任务模板](docs/CODEX_SOL_TASK.md)，每次替换源 GLB、工作目录和仓库路径；该模板包含相同的反捷径与视觉复核要求。
 
 实际试跑和失败案例见 [验证记录](docs/SMOKE_TEST_2026-09-24.md)。旧版 `1.2` 已完成真实 GLB 的 DeepSeek 单会话交付；新版 `1.3` 的三档构建/校验和 DeepSeek 独立看图作答分别测过，但**新版全流程单会话尚未成功跑通**，不应按生产稳定性看待。
+
+Codex Sol xhigh 的三个逐场景复核及本次提示词调整见 [2026-09-25 迭代记录](docs/ITERATIONS_2026-09-25.md)。其可视化审查页在工作区 `../scene-qa-runs/iterations-2026-09-25/index.html`；本轮的两个构建案例都未通过三档视觉复核，不能当作正式题库样本。
 
 ## 开发验证
 

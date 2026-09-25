@@ -17,6 +17,15 @@ class SuitabilityTests(unittest.TestCase):
                                      {"name": "Barrel_Material.004_0"}]})
         self.assertEqual(result["status"], "needs_agent_review")
 
+    def test_namespaced_export_uses_semantic_object_suffix(self):
+        result = screen({"meshes": [
+            {"name": "Room:polySurface694_Room:House_Floor_Main_0"},
+            {"name": "Room:polySurface735_Room:Book_Cook_0"},
+            {"name": "Room:polySurface736_Room:Cup_Blue_0"},
+        ]})
+        self.assertEqual(result["status"], "needs_agent_review")
+        self.assertEqual(result["named_prop_categories"], ["book", "cup"])
+
 
 if __name__ == "__main__":
     unittest.main()

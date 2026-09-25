@@ -16,11 +16,15 @@ STRUCTURAL = {
 }
 GENERIC = {"object", "cube", "mesh", "plane", "cylinder", "sphere", "circle",
            "torus", "collection", "node", "primitive", "pcube", "pplane",
-           "pcylinder", "pcone", "pasted"}
+           "pcylinder", "pcone", "pasted", "polysurface"}
 
 
 def normalized_kind(name: str) -> str:
     name = name.strip()
+    # Maya/glTF exports can prepend a namespace and polygon ID before the
+    # meaningful object name, e.g. Room:polySurface42_Room:Book_Cook_0.
+    # Keep the last namespace component so Book is recognized as a prop.
+    name = name.rsplit(":", 1)[-1]
     if name.lower().startswith(("prop_", "sm_")):
         name = name.split("_", 1)[1]
     elif name.lower().startswith("background_"):

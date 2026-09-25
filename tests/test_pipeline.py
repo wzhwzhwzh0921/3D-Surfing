@@ -7,7 +7,7 @@ from scene_factory.schema import answer_from_model, answer_from_registry, read_p
 from scene_factory.download import glb_header
 from scene_factory.gateway import normalize_usage
 from scene_factory.question_types import QUESTION_TYPES, type_order
-from scene_factory.runner import observed_evidence_reads
+from scene_factory.runner import observed_evidence_reads, visual_quality_status
 
 
 def variant(level, kind, count):
@@ -36,6 +36,18 @@ class PipelineTests(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    def test_visual_self_rejection_cannot_become_candidate(self):
+        path = Path(self.temp.name) / "visual_quality.json"
+        self.assertEqual(visual_quality_status(path)[0], "needs_review")
+        tiers = {level: {"status": "pass", "reason": "Visible after orbit"}
+                 for level in ("simple", "medium", "hard")}
+        tiers["medium"] = {"status": "fail", "reason": "Only a fabric corner is visible"}
+        path.write_text(json.dumps({"status": "rejected", "tiers": tiers}))
+        self.assertEqual(visual_quality_status(path)[0], "visual_rejected")
+        path.write_text(json.dumps({"status": "accepted", "tiers": tiers}))
+        with self.assertRaisesRegex(ValueError, "cannot accept a failed tier"):
+            visual_quality_status(path)
 
     def test_plan_and_computed_answers(self):
         p = read_plan(self.path)

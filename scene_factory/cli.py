@@ -174,6 +174,7 @@ def main() -> None:
                                preflight=not a.no_preflight)
             print(json.dumps({"total": len(result), "candidate": sum(x["status"] == "candidate" for x in result),
                               "needs_review": sum(x["status"] == "needs_review" for x in result),
+                              "visual_rejected": sum(x["status"] == "visual_rejected" for x in result),
                               "unsuitable": sum(x["status"] == "unsuitable" for x in result),
                               "failed": sum(x["status"] == "failed" for x in result),
                               "results": result}, ensure_ascii=False, indent=2))

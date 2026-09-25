@@ -60,6 +60,9 @@ def camera_for(objects, azimuth, elevation):
     camera.rotation_euler = (center - position).to_track_quat("-Z", "Y").to_euler()
     camera.data.type = "ORTHO"
     camera.data.ortho_scale = max(diagonal * 1.3, 2)
+    # The default far plane is 1000 Blender units. Large imported scenes can
+    # put this camera beyond it, leaving every preview blank despite valid mesh.
+    camera.data.clip_end = max(1000, radius * 4)
     bpy.context.scene.camera = camera
     return camera
 
@@ -179,7 +182,10 @@ def support_z(obj, x, y, top):
     polygons = [tuple(p.vertices) for p in obj.data.polygons]
     bvh = BVHTree.FromPolygons(verts, polygons, all_triangles=False)
     origin = Vector((x, y, top + 1000))
-    hit, _, _, _ = bvh.ray_cast(origin, Vector((0, 0, -1)), 2000)
+    # Imported scenes may be taller than 2000 units. Cast past this support
+    # mesh's lowest point so floors remain reachable even below a tall roof.
+    cast_distance = max(2000, origin.z - min(v.z for v in verts) + 1)
+    hit, _, _, _ = bvh.ray_cast(origin, Vector((0, 0, -1)), cast_distance)
     if hit is None:
         raise ValueError(f"No support surface under ({x}, {y}) on {obj.name}")
     return hit.z
