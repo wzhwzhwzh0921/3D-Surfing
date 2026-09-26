@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import filecmp
 import os
 from pathlib import Path
 from copy import deepcopy
@@ -538,6 +539,36 @@ def repair_change_summary(before: dict, after: dict) -> dict[str, list[str]]:
     return changes
 
 
+def repaired_asset_levels(before_output: Path, after_output: Path) -> list[str]:
+    """Catch a Blender code repair that changes exported geometry without editing the plan."""
+    changed = []
+    for level in ("simple", "medium", "hard"):
+        old = before_output / level / "scene.glb"
+        new = after_output / level / "scene.glb"
+        if old.is_file() and new.is_file() and not filecmp.cmp(old, new, shallow=False):
+            changed.append(level)
+    return changed
+
+
+def repair_improvement_attribution(verdict_changes: dict, repair_changes: dict) -> dict[str, list[str]]:
+    """Keep same-question improvement distinct from a changed question specification."""
+    improved = set(verdict_changes["improved_levels"])
+    changed_question = set(repair_changes["changed_question_levels"])
+    changed_answer = set(repair_changes["changed_answer_levels"])
+    scene_edits = set().union(*(set(repair_changes.get(key, [])) for key in (
+        "changed_camera_levels", "changed_placement_levels", "changed_evidence_design_levels",
+        "changed_asset_levels")))
+    return {
+        "same_question_improved_levels": [level for level in ("simple", "medium", "hard")
+                                          if level in improved - changed_question],
+        "changed_question_improved_levels": [level for level in ("simple", "medium", "hard")
+                                             if level in improved & changed_question],
+        "answer_only_improved_levels": [level for level in ("simple", "medium", "hard")
+                                        if level in improved &
+                                        (changed_answer - changed_question - scene_edits)],
+    }
+
+
 def clear_phase_artifacts(work: Path) -> None:
     for pattern in ("supervisor_round_*", "repair_round_*"):
         for path in work.glob(pattern):
@@ -616,6 +647,8 @@ def supervise_and_repair(work: Path, scene_id: str, state: dict, report: dict, *
             if backup is not None:
                 verdict_changes = supervisor_verdict_changes(previous_review, review)
                 rounds[-1]["verdict_changes"] = verdict_changes
+                rounds[-1]["improvement_attribution"] = repair_improvement_attribution(
+                    verdict_changes, rounds[-2]["repair_changes"])
                 if verdict_changes["regressed_levels"] or not verdict_changes["improved_levels"]:
                     try:
                         restore_attempt(work, backup)
@@ -690,9 +723,13 @@ def supervise_and_repair(work: Path, scene_id: str, state: dict, report: dict, *
                     raise ValueError("Repair changed the original source GLB")
                 revised_plan = read_plan(work / "plan.json")
                 rounds[-1]["repair_changes"] = repair_change_summary(prior_plan, revised_plan)
+                rounds[-1]["repair_changes"]["changed_asset_levels"] = repaired_asset_levels(
+                    backup / "output", work / "output")
                 for position, level in enumerate(("simple", "medium", "hard")):
                     if level in protected and revised_plan["variants"][position] != protected[level]:
                         raise ValueError(f"Repair changed non-revise tier: {level}")
+                if not any(rounds[-1]["repair_changes"].values()):
+                    raise ValueError("Repair made no substantive question, answer, camera or scene change")
             except Exception as exc:
                 try:
                     restore_attempt(work, backup)

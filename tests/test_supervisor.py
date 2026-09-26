@@ -9,7 +9,8 @@ from unittest.mock import patch
 
 from scene_factory.cli import render_report
 from scene_factory.runner import (combined_usage, repair_change_summary, run_model_phase,
-                                  supervise_and_repair, supervisor_verdict_changes)
+                                  supervise_and_repair, supervisor_verdict_changes,
+                                  repair_improvement_attribution)
 from scene_factory.supervisor import (LEVELS, VIEWS, checked_image_reads,
                                       evidence_hashes, extract_result, reconcile_independent_answers,
                                       review_item_hashes,
@@ -142,6 +143,11 @@ class SupervisorTests(unittest.TestCase):
                          {"changed_question_levels": ["hard"], "changed_answer_levels": ["simple"],
                           "changed_camera_levels": ["medium"], "changed_placement_levels": ["medium"],
                           "changed_evidence_design_levels": []})
+        attribution = repair_improvement_attribution(
+            {"improved_levels": ["simple", "medium", "hard"]}, repair_change_summary(before, after))
+        self.assertEqual(attribution["changed_question_improved_levels"], ["hard"])
+        self.assertEqual(attribution["same_question_improved_levels"], ["simple", "medium"])
+        self.assertEqual(attribution["answer_only_improved_levels"], ["simple"])
 
     def test_repair_rechecks_and_keeps_improvement(self):
         reports = [verdicts(medium="revise"), verdicts()]
@@ -154,7 +160,7 @@ class SupervisorTests(unittest.TestCase):
                 write_review_stream(kwargs["stream_path"], work, reports.pop(0))
             else:
                 changed = json.loads((work / "plan.json").read_text())
-                changed["variants"][1]["version"] = 1
+                changed["variants"][1]["start_camera"] = {"azimuth_deg": 90}
                 (work / "plan.json").write_text(json.dumps(changed))
                 kwargs["stream_path"].write_text('{"type":"result","result":"done"}')
             return {"input_tokens": 10}
@@ -168,10 +174,42 @@ class SupervisorTests(unittest.TestCase):
                                  max_repairs=1, supervisor_model="independent-judge")
         self.assertEqual(state["status"], "candidate")
         self.assertEqual(state["supervisor"]["status"], "passed")
-        self.assertEqual(json.loads((self.work / "plan.json").read_text())["variants"][1]["version"], 1)
+        self.assertEqual(json.loads((self.work / "plan.json").read_text())
+                         ["variants"][1]["start_camera"], {"azimuth_deg": 90})
+        self.assertEqual(state["supervisor"]["rounds"][1]["improvement_attribution"]
+                         ["same_question_improved_levels"], ["medium"])
         self.assertEqual(calls, [("supervisor_round_0.jsonl", "independent-judge"),
                                  ("repair_round_1.jsonl", "dummy"),
                                  ("supervisor_round_1.jsonl", "independent-judge")])
+
+    def test_repair_that_changes_question_is_recorded_separately(self):
+        reports = [verdicts(medium="revise"), verdicts()]
+
+        def phase(work, **kwargs):
+            name = kwargs["stream_path"].name
+            if name.startswith("supervisor"):
+                write_review_stream(kwargs["stream_path"], work, reports.pop(0))
+            else:
+                changed = json.loads((work / "plan.json").read_text())
+                changed["variants"][1]["question"] = {"text": "Which cushion is behind the sofa?"}
+                (work / "plan.json").write_text(json.dumps(changed))
+                kwargs["stream_path"].write_text('{"type":"result","result":"done"}')
+            return {}
+
+        revised_report = validation_fixture()
+        revised_report["results"][1]["question"] = "Which cushion is behind the sofa?"
+        state = {"status": "candidate", "source": {}}
+        with patch("scene_factory.runner.run_model_phase", side_effect=phase), \
+             patch("scene_factory.runner.finalize_attempt", return_value=(revised_report, "accepted", {})), \
+             patch("scene_factory.runner.read_plan", side_effect=lambda p: json.loads(p.read_text())):
+            supervise_and_repair(self.work, "scene", state, validation_fixture(), provider="tokenhub",
+                                 key="dummy", model="dummy", upstream="dummy", timeout=30,
+                                 max_repairs=1)
+        self.assertEqual(state["supervisor"]["status"], "passed")
+        self.assertEqual(state["supervisor"]["rounds"][1]["improvement_attribution"],
+                         {"same_question_improved_levels": [],
+                          "changed_question_improved_levels": ["medium"],
+                          "answer_only_improved_levels": []})
 
     def test_repair_cannot_trade_one_tier_regression_for_larger_gain(self):
         before = verdicts(simple="review", medium="revise")
@@ -187,7 +225,7 @@ class SupervisorTests(unittest.TestCase):
                 write_review_stream(kwargs["stream_path"], work, reports.pop(0))
             else:
                 changed = json.loads((work / "plan.json").read_text())
-                changed["variants"][1]["version"] = 1
+                changed["variants"][1]["start_camera"] = {"azimuth_deg": 90}
                 (work / "plan.json").write_text(json.dumps(changed))
                 kwargs["stream_path"].write_text('{"type":"result","result":"done"}')
             return {}
@@ -216,7 +254,7 @@ class SupervisorTests(unittest.TestCase):
                 write_review_stream(kwargs["stream_path"], work, reports.pop(0))
             else:
                 changed = json.loads((work / "plan.json").read_text())
-                changed["variants"][1]["version"] = 1
+                changed["variants"][1]["start_camera"] = {"azimuth_deg": 90}
                 (work / "plan.json").write_text(json.dumps(changed))
                 kwargs["stream_path"].write_text('{"type":"result","result":"done"}')
             return {}
@@ -229,8 +267,61 @@ class SupervisorTests(unittest.TestCase):
                                  key="dummy", model="dummy", upstream="dummy", timeout=30,
                                  max_repairs=1)
         self.assertEqual(state["status"], "supervisor_rejected")
+        self.assertEqual(state["supervisor"]["status"], "repair_did_not_improve")
         self.assertEqual(state["supervisor"]["active_round"], 0)
         self.assertEqual(json.loads((self.work / "plan.json").read_text()), self.original_plan)
+
+    def test_no_substantive_repair_skips_another_judge_call(self):
+        calls = []
+
+        def phase(work, **kwargs):
+            name = kwargs["stream_path"].name
+            calls.append(name)
+            if name.startswith("supervisor"):
+                write_review_stream(kwargs["stream_path"], work, verdicts(medium="revise"))
+            else:
+                changed = json.loads((work / "plan.json").read_text())
+                changed["variants"][1]["version"] = 1
+                (work / "plan.json").write_text(json.dumps(changed))
+                kwargs["stream_path"].write_text('{"type":"result","result":"done"}')
+            return {}
+
+        state = {"status": "candidate", "source": {}}
+        with patch("scene_factory.runner.run_model_phase", side_effect=phase), \
+             patch("scene_factory.runner.finalize_attempt", return_value=(validation_fixture(), "accepted", {})), \
+             patch("scene_factory.runner.read_plan", side_effect=lambda p: json.loads(p.read_text())):
+            supervise_and_repair(self.work, "scene", state, validation_fixture(), provider="tokenhub",
+                                 key="dummy", model="dummy", upstream="dummy", timeout=30,
+                                 max_repairs=1)
+        self.assertEqual(state["supervisor"]["status"], "repair_invalid")
+        self.assertIn("no substantive", state["supervisor"]["error"])
+        self.assertEqual(calls, ["supervisor_round_0.jsonl", "repair_round_1.jsonl"])
+        self.assertEqual(json.loads((self.work / "plan.json").read_text()), self.original_plan)
+
+    def test_exported_asset_change_counts_as_repair_without_plan_edit(self):
+        (self.work / "output" / "medium" / "scene.glb").write_bytes(b"original")
+        reports = [verdicts(medium="revise"), verdicts()]
+
+        def phase(work, **kwargs):
+            name = kwargs["stream_path"].name
+            if name.startswith("supervisor"):
+                write_review_stream(kwargs["stream_path"], work, reports.pop(0))
+            else:
+                (work / "output" / "medium" / "scene.glb").write_bytes(b"repaired")
+                kwargs["stream_path"].write_text('{"type":"result","result":"done"}')
+            return {}
+
+        state = {"status": "candidate", "source": {}}
+        with patch("scene_factory.runner.run_model_phase", side_effect=phase), \
+             patch("scene_factory.runner.finalize_attempt", return_value=(validation_fixture(), "accepted", {})), \
+             patch("scene_factory.runner.read_plan", side_effect=lambda p: json.loads(p.read_text())):
+            supervise_and_repair(self.work, "scene", state, validation_fixture(), provider="tokenhub",
+                                 key="dummy", model="dummy", upstream="dummy", timeout=30,
+                                 max_repairs=1)
+        self.assertEqual(state["supervisor"]["status"], "passed")
+        self.assertEqual(state["supervisor"]["rounds"][0]["repair_changes"]
+                         ["changed_asset_levels"], ["medium"])
+        self.assertEqual((self.work / "output" / "medium" / "scene.glb").read_bytes(), b"repaired")
 
     def test_repair_must_preserve_passing_tiers(self):
         def phase(work, **kwargs):
