@@ -40,8 +40,13 @@ class LauncherTests(unittest.TestCase):
             receipt = json.loads((Path(directory)/'launch.json').read_text())
             self.assertNotIn('private-fixture', json.dumps(receipt))
             self.assertEqual(receipt['model'], 'other-vision-model')
+            self.assertEqual(receipt['source_provider'], 'prosceneverse-search')
+            self.assertIn('--provider', receipt['command'])
             with patch.object(launcher.os, 'kill', side_effect=ProcessLookupError):
                 launcher.main(args)
+                self.assertEqual(start.call_count, 2)
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    launcher.main([*args, '--provider', 'scansceneverse-search'])
                 self.assertEqual(start.call_count, 2)
                 with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                     launcher.main([*args, '--render-backend', 'k8s'])

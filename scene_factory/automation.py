@@ -22,6 +22,7 @@ STAGE_FILES = ["scene_factory/automation.py", "scene_factory/workflow.py", "scen
                "tools/scene_auto_pipeline.py",
                "scene_factory/sources.py", "tools/scene_pipeline.py",
                "scene_factory/live_sources.py",
+               "scene_factory/multi_sources.py",
                "scene_factory/download.py", "scene_factory/render_policy.py",
                "scene_factory/rendering.py", "scene_factory/model_backend.py",
                "tools/scene_screen_batch.py", "tools/prompts/scene_screen_zh.txt",

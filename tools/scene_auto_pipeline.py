@@ -7,13 +7,14 @@ import sys
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from scene_factory.automation import locked_campaign
+from scene_factory.sources import DEFAULT_PROVIDER, PROVIDERS
 
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--out',type=Path,required=True)
     p.add_argument('--target',type=int,default=100,help='final model-reviewed medium QA deliveries')
-    p.add_argument('--provider',choices=('prosceneverse-search','prosceneverse','catalog'),default='prosceneverse-search')
+    p.add_argument('--provider',choices=PROVIDERS,default=os.getenv('SCENEQA_SOURCE_PROVIDER',DEFAULT_PROVIDER))
     p.add_argument('--catalog',type=Path,help='optional existing JSONL GLB source pool')
     p.add_argument('--exclude-history',type=Path,action='append',default=[],
                    help='historical JSONL UIDs to exclude; used only as a denylist, never as sources')
@@ -40,7 +41,7 @@ def main():
     p.add_argument('--url',default=os.getenv('LUNA_CHAT_URL','http://127.0.0.1:18773/v1/chat/completions'))
     a=p.parse_args()
     if a.catalog:a.provider='catalog'
-    balanced = a.provider=='prosceneverse-search'
+    balanced = a.provider in ('multi-source','prosceneverse-search','scansceneverse-search')
     if a.min_outdoor is None:a.min_outdoor=(a.target+1)//2 if balanced else 0
     if a.min_indoor is None:a.min_indoor=a.target//2 if balanced else 0
     if min(a.min_indoor,a.min_outdoor)<0 or a.min_indoor+a.min_outdoor>a.target:

@@ -34,9 +34,26 @@ flowchart TD
 
 ## 素材从哪里来
 
-当前默认来源是 [Stable-X/ProSceneverse 在线元数据](https://huggingface.co/datasets/Stable-X/ProSceneverse)。程序按预置关键词检索场景，再通过 Objaverse 的公开路径索引找到并下载对应 GLB。检索覆盖市场摊位、码头、营地、庭院、室内工作间和居家场景；实际室内 / 室外标签由模型看渲染图确认。
+默认继续使用创作场景源 `prosceneverse-search`，检索范围已扩充；另接入扫描源和可选的多来源模式：
 
-这是已接入的公开在线来源；当前没有实现任意网站的通用搜索和下载。主流程也不默认复用仓库中的历史 `catalog/` 素材池。每个新任务建立自己的在线索引与缓存；同一输出目录续跑会复用本批次已验证的文件和记录。
+| 来源 | 补充的内容 | 下载解析 |
+|---|---|---|
+| [ProSceneverse](https://huggingface.co/datasets/Stable-X/ProSceneverse) | 创作者制作的场景、diorama、室内和室外环境 | 新下载的元数据 + Objaverse 公开 GLB 路径索引 |
+| [ScanSceneverse](https://huggingface.co/datasets/Stable-X/ScanSceneverse) | 真实扫描的店铺、街景、庭院和室内空间 | 同样按 UID 查真实 GLB 索引；不把元数据归档路径当下载链接 |
+
+检索从原先5组扩为20组，室内、室外各10组；增加街巷、工业作业区、农场、交通设施、仓储、公共空间等。选择 `--provider multi-source` 时，来源之间轮流取样，每个来源内部均衡检索环境与类别；这只是发现策略，实际环境与可用性仍由模型看真实3D图确认。跨来源按 UID 去重，下载后继续按文件 SHA-256 去重。
+
+这里使用公开数据集索引和 HTTP 下载，**不需要 Serper 或 Jina**。尚未实现任意网页的通用搜索和下载；两个库也不代表两个完全独立的平台，资产仍可能来自相同的原始创作者。数据集条目总量不等于可用题库：仅有实际 GLB 索引、满足单件许可和体积要求的素材才进入后续模型筛选。主流程不默认读取历史 `catalog/` 素材池。
+
+可以先单独查看来源，既不渲染，也不调用模型：
+
+```bash
+.venv/bin/sceneqa workflow discover --out runs/discovery-check --limit 40 --provider multi-source
+```
+
+扫描源的试看片包含破损扫描体、全景贴图球和内容稀疏的墙面，尚不适合作为默认生产源，故仅在显式选择时启用，筛选标准保持一致。
+
+这会保存 `sources.jsonl` 和带游标的 `discovery.json`。**这些是发现记录，尚未下载或验收。** 完整生产无需先运行这一步。通过 `--provider prosceneverse-search` 或 `--provider scansceneverse-search` 可以只用某个来源，后台启动器同样支持；`--query` 可重复指定关键词。详见[来源与扩展](docs/AUTO_PIPELINE.md#在线搜集)。
 
 来源阶段检查可下载地址、许可、体积和重复文件，保留作者、来源页和单资产许可证。场景是否内容丰富、是否值得探索、是否具备清楚的出题证据，交给模型观察真实图片判断。下载或接口错误记录为 `failed`；质量不合格记录为 `reject`。留删清单不会删除原资产。详见[在线发现](docs/AUTO_PIPELINE.md)和[筛选规则](docs/SCREENING_RULES.md)。
 
@@ -129,6 +146,7 @@ export SCENEQA_RENDER_IMAGE=your-registry/sceneqa-render:tag
 | 入口 | 自动找新素材 | 用途与产出 |
 |---|---|---|
 | `tools/start_followup_batch.py` / `workflow followup-batch` | 是 | **完整主线**：发现、筛选、原题、追加增难及审核，交付复合任务 |
+| `workflow discover` | 是，仅发现 | 只检查来源检索与留存游标；不渲染、不调用模型、不产题 |
 | `workflow auto` | 是 | 只生产中等原题及答案，输出 `selected.jsonl` |
 | `workflow followup` | 否，读取已有原题 | 对已审核原题追加多目标 / 空间链需求 |
 | `workflow screen` → `workflow qa` | 手动指定素材 | 对 URL / 本地 GLB 清单筛选、生成原题 |

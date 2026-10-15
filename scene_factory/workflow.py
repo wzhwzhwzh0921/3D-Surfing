@@ -21,6 +21,8 @@ class Stage:
 # Keep orchestration in its existing files until those stages are redesigned.
 # Only screening has been moved into the package in this cleanup.
 STAGES = {
+    "discover": Stage("只发现在线 GLB 来源、保存来源证据及续跑游标；不渲染、不调用模型",
+                      "scene_factory/discovery.py", "scene_factory.discovery"),
     "smoke": Stage("使用仓库小样验证渲染、原景保留和局部相机；不调用模型",
                    "scene_factory/smoke.py", "scene_factory.smoke"),
     "screen": Stage("准备 GLB、取景、筛选，输出留/删/失败清单",
@@ -61,10 +63,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.stage == "config":
             from .model_backend import configured_model
             from .rendering import render_settings
+            from .sources import DEFAULT_PROVIDER
             print(json.dumps({"model": {"backend": os.getenv("SCENEQA_MODEL_BACKEND", "codex"),
                               "name": configured_model(), "codex_auth": os.getenv("SCENEQA_CODEX_AUTH", "chatgpt"),
                               "codex_provider": os.getenv("SCENEQA_CODEX_PROVIDER", "default")},
-                              "render": render_settings()}, ensure_ascii=False, indent=2))
+                              "render": render_settings(),
+                              "source_provider": os.getenv("SCENEQA_SOURCE_PROVIDER", DEFAULT_PROVIDER)}, ensure_ascii=False, indent=2))
             return 0
         if args.stage == "list":
             if args.json:

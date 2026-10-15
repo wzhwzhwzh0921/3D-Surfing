@@ -20,7 +20,45 @@ python3 -m scene_factory workflow auto \
 
 ## 在线搜集
 
-默认 `prosceneverse-search` 每个新任务从 [Stable-X/ProSceneverse](https://huggingface.co/datasets/Stable-X/ProSceneverse) 重新下载约14 MB的公开 `metadata.parquet`，分别检索市场摊位、码头作业、营地庭院、室内工作间和居家场景。根据 UID 与本轮下载的 Objaverse `object-paths.json.gz` 连接，得到实际 GLB 地址；数据集的 `file_name` 是内部归档路径，不能用作 Objaverse 路径。实际场景逐件从网上下载，不读取旧素材池。元数据需要 `.[batch]` 中的 pyarrow；当前入口覆盖这一公开来源，不能将其称作已经遍搜所有网站。
+默认使用扩展后的 `prosceneverse-search`。显式选择 `multi-source` 时，轮流读取 [ProSceneverse](https://huggingface.co/datasets/Stable-X/ProSceneverse) 和 [ScanSceneverse](https://huggingface.co/datasets/Stable-X/ScanSceneverse) 的公开 `metadata.parquet`，分别约14 MB、26 MB。前者主要为创作者场景，后者为真实扫描。两个来源都根据 UID 与本轮下载的 Objaverse `object-paths.json.gz` 连接，得到实际 GLB 地址。元数据里的 `file_name` 是内部归档路径，不能当作直接下载链接；查不到真实路径的条目不进入下载。不会为了接入新来源而绕过体积或来源要求。
+
+这一步直接使用公开数据集索引、Hugging Face HTTP 和 Objaverse 索引，不依赖 Serper/Jina，也不是任意网页爬虫。元数据读取需要 `.[batch]` 中的 pyarrow。两个库的原始创作者可能重合；UID 和 GLB 内容哈希分别防止跨来源和下载后重复。ScanSceneverse 的上游 `decision=REMOVE` 常表示“不属于创作场景”，不当作本流程的场景质量结论；是否保留仍由本流程的模型观察决定。
+
+检索从原来的5组扩为20组，室内、室外各10组：
+
+| 室外 | 室内 |
+|---|---|
+| 市集、小吃摊 | 工作间、实验室 |
+| 港口、船坞 | 居家、卧室 |
+| 庭院、花园 | 餐馆、酒馆、面包房 |
+| 营地、野餐 | 商店、书店、杂货铺 |
+| 街角、巷道、店面 | 厨房、餐厅 |
+| 工业作业、废品站、加油站 | 仓储、车库、阁楼 |
+| 农场、马厩 | 图书馆、教室、办公室 |
+| 车站、交通设施 | 爱好室、音乐室、画室 |
+| 历史街村、城堡庭院 | 酒店前台、服务业 |
+| 游乐场、屋顶露台 | 控制室、专用操作台 |
+
+多来源模式下，来源之间轮流供料，每个来源内部先平衡室内外检索提示，再平衡细分类别。提示不是最终标签；模型可认定实际图像为另一环境，或直接删除。某来源耗尽后继续其他来源；网络失败则保留原游标并报错，不静默当作来源耗尽。
+
+```bash
+# 只检查发现功能，不下载 GLB、不渲染、不调用模型。
+.venv/bin/sceneqa workflow discover --out runs/discovery-check --limit 40 --provider multi-source
+
+# 仅用新扫描源生产原题；完整复合任务主入口也支持 --provider / --query。
+.venv/bin/sceneqa workflow auto --out runs/scan-originals --target 10 \
+  --provider scansceneverse-search --query courtyard --query grocery
+```
+
+`discover` 的 `discovery.json` 原子保存来源行与游标，`sources.jsonl` 是便于查看的派生文件；同目录重跑恢复，可提高 `--limit`。元数据快照及指纹不变时可离线恢复。这里的条目数只是发现数量，不能算作下载成功或模型验收。
+
+多来源会将总 `--max-scan`、`--max-pages` 预算分配给各来源，不按来源数量翻倍；取样轮次重复扫到的匹配行也计入预算。若只给一个分页预算，只能访问第一个来源并明确报告预算不足。生产后台主入口默认窗口足够大；原题 `auto` 可按需要提高发现预算。
+
+新增来源的接口位于 `sources.py`（配置与路由）、`live_sources.py`（元数据/真实文件解析）、`multi_sources.py`（轮流取样与事务游标）。本轮已接入两个可解析到 GLB 的来源；扫描源小批试看片中出现全景贴图球、破损扫描体与稀疏墙面，暂时保持显式启用，不自动替代创作场景源。尚未接入 Sketchfab 在线 Download API、SceneSmith tar 转换或 HSSD 整屋下载。
+
+其他来源的实查情况（2026-10-15）：Sketchfab Download API 需要用户登录认证，返回短期下载链接；SceneSmith 每场景 tar 通常数百 MB，HSSD 当前整场景 GLB 最小约78.5 MB，均超出默认64 MiB预算；Source City 的 README 列出部分纹理的再分发例外。这些来源没有混入默认队列。是否补接应由真实样本的下载、转换和模型筛选结果决定，不能仅按项目介绍认定适用。
+
+原始说明：[Sketchfab Download API](https://sketchfab.com/developers/download-api/downloading-models)、[SceneSmith](https://huggingface.co/datasets/nepfaff/scenesmith-example-scenes)、[HSSD](https://huggingface.co/datasets/hssd/hssd-scenes)、[Source City](https://github.com/SpectraStudios/SourceCityToolkit_glb)。
 
 程序保留原资产的来源页面、作者、单件许可证、类别和文件元数据。来源阶段仅检查实际GLB地址、原有在线许可/来源要求、已知体积与去重，不再按面数、材质、纹理、标题关键词或类别判断场景质量。类别仅用于均衡取样，缺失则归入 UNKNOWN。所有内容是否丰富的判断交给模型看真实场景图。
 
@@ -43,13 +81,13 @@ JSONL 支持 `uid`／`scene_id` 与 `url`／`glb_url`／`download_url` 别名。
 
 程序不计算或核验语义答案。API／下载／渲染／文件错误写入 `failed.jsonl`，不能当成题目质量剔除；已知超大和内容重复可在下载预检阶段剔除。相同题图及协议的第一次有效审核意见被缓存，FAIL 和 PASS 都复用，不能反复询问原样题目直到获得 PASS。
 
-`--target` 指**最终通过独立模型审核且文件完整的题目目标**。默认新在线检索任务还需达到室外 `ceil(target/2)`、室内 `floor(target/2)` 的交付配额；标签来自实际图像，检索词仅为提示。`--min-outdoor / --min-indoor` 可调整。只够总数、尚未达到环境配额时继续搜索；通过审核的所有结果在 `keep.jsonl`，最终按配额选出的目标题组在 `selected.jsonl`。下载成功或初筛通过不计作交付。
+`--target` 指**最终通过独立模型审核且文件完整的题目目标**。默认新在线检索任务（两个单源检索或多来源）还需达到室外 `ceil(target/2)`、室内 `floor(target/2)` 的交付配额；标签来自实际图像，检索词仅为提示。`--min-outdoor / --min-indoor` 可调整。只够总数、尚未达到环境配额时继续搜索；通过审核的所有结果在 `keep.jsonl`，最终按配额选出的目标题组在 `selected.jsonl`。下载成功或初筛通过不计作交付。
 
 ## 断点、预算与失败重试
 
 选择日志将批次来源与推进后的发现游标一起原子落盘。重启先继续已选批次，不重新随机取素材；生成与模型请求使用各自指纹缓存。已经交付的结果会检查文件完整性和哈希，不凭旧状态计数。独占输出锁防止两个进程同时写同一批次。
 
-同一协议内中断后使用同一命令续跑。新来源协议为 `sceneqa-discovery-v2-model-screen`，不能复用旧预筛游标或将旧来源清单解释成新规则选取的来源；升级使用新输出目录，从原始来源重新准备。旧 `--max-faces` 仅为命令兼容接受，不生效。历史处理失败可以显式重试：
+同一协议内中断后使用同一命令续跑。本轮多来源协议为 `sceneqa-discovery-v3-multi-source`，不能复用旧预筛游标或将旧来源清单解释成新规则选取的来源；升级使用新输出目录，从原始来源重新准备。旧 `--max-faces` 仅为命令兼容接受，不生效。历史处理失败可以显式重试：
 
 ```bash
 python3 -m scene_factory workflow auto \
@@ -61,6 +99,7 @@ python3 -m scene_factory workflow auto \
 
 | 参数 | 默认值 | 含义 |
 | --- | ---: | --- |
+| `--provider` | prosceneverse-search | 扩展的创作场景检索；可选 multi-source 或扫描单源 |
 | `--target` | 100 | 最终模型审核通过的交付数量 |
 | `--batch-size` | 4 | 每批发现并筛选的来源数 |
 | `--max-scenes` | 5000 | 本任务最多下载处理的不同来源条目 |

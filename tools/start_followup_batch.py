@@ -17,6 +17,7 @@ from scene_factory.automation import save
 from scene_factory.model_backend import configured_model, configure_relay, model_identity
 from scene_factory.render_policy import render_backend
 from scene_factory.rendering import render_settings
+from scene_factory.sources import DEFAULT_PROVIDER, PROVIDERS
 
 
 def snapshot(destination):
@@ -47,9 +48,13 @@ def main(argv=None):
     parser.add_argument("--reasoning", default=os.getenv("SCENEQA_CODEX_REASONING", "xhigh"))
     parser.add_argument("--render-backend", choices=("local", "k8s"), default=render_backend())
     parser.add_argument("--max-scenes", type=int, default=5000)
+    parser.add_argument("--provider", choices=[p for p in PROVIDERS if p != "catalog"],
+                        default=os.getenv("SCENEQA_SOURCE_PROVIDER", DEFAULT_PROVIDER))
+    parser.add_argument("--query", dest="queries", action="append", default=[])
+    parser.add_argument("--max-bytes", type=int, default=64 * 1048576)
     args = parser.parse_args(argv)
-    if min(args.target, args.max_scenes) < 1 or not 1 <= args.port <= 65535:
-        parser.error("Target/max-scenes must be positive and port must be between 1 and 65535")
+    if min(args.target, args.max_scenes, args.max_bytes) < 1 or not 1 <= args.port <= 65535:
+        parser.error("Target/max-scenes/max-bytes must be positive and port must be between 1 and 65535")
     os.environ["SCENEQA_MODEL_BACKEND"] = args.backend
     os.environ["SCENEQA_RENDER_BACKEND"] = args.render_backend
     os.environ["SCENEQA_MODEL"] = args.model
@@ -58,6 +63,7 @@ def main(argv=None):
     identity = model_identity()
     settings = {"model": args.model, "model_backend": args.backend, "reasoning": args.reasoning,
                 "port": args.port, "render_configuration": render_settings(), "max_scenes": args.max_scenes,
+                "source_provider": args.provider, "queries": sorted(set(args.queries)), "max_bytes": args.max_bytes,
                 "seed_campaign": [str(p.resolve()) for p in args.seed_campaign],
                 "exclude_history": [str(p.resolve()) for p in args.exclude_history]}
     out = args.out.resolve()
@@ -83,7 +89,10 @@ def main(argv=None):
         snapshot(runtime)
         command = [sys.executable, "-m", "scene_factory", "workflow", "followup-batch",
                    "--out", str(out), "--target", str(args.target), "--model", args.model,
-                   "--max-scenes", str(args.max_scenes), "--watch"]
+                   "--max-scenes", str(args.max_scenes), "--max-bytes", str(args.max_bytes),
+                   "--provider", args.provider, "--watch"]
+        for query in args.queries:
+            command += ["--query", query]
         for source in args.seed_campaign:
             command += ["--seed-campaign", str(source.resolve())]
         for source in args.exclude_history:

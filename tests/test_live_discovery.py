@@ -39,7 +39,8 @@ class LiveDiscoveryTests(unittest.TestCase):
     def test_live_queries_balance_hints_and_preserve_remote_provenance(self):
         with patch('scene_factory.sources._fetch',side_effect=self.fetch):
             result=discover_batch(self.root,5,provider='prosceneverse-search',page_size=10)
-        self.assertEqual([r['environment_hint'] for r in result['rows']],['outdoor']*3+['indoor']*2)
+        self.assertEqual([r['environment_hint'] for r in result['rows']],
+                         ['outdoor','indoor','outdoor','indoor','outdoor'])
         for row in result['rows']:
             self.assertIn('fetched_at',row['discovery'])
             self.assertTrue(row['url'].startswith('https://huggingface.co/datasets/allenai/objaverse/'))

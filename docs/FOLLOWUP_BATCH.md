@@ -19,11 +19,11 @@
 
 此命令默认从零在线收集素材，**不用先运行 `auto`、`screen` 或 `qa`**。`followup-batch` 会在内部调用这些生产阶段，原题不足就继续搜索、筛选及补充。小批试跑可把 `--target` 改为4，并使用新输出目录。
 
-当前在线来源为 ProSceneverse 元数据检索 + Objaverse GLB 下载；预置检索覆盖室内和室外，不使用历史 `catalog/` 作为默认来源，详见[在线发现](AUTO_PIPELINE.md)。本地运行指调度与默认渲染的位置；素材下载和配置的远程模型服务仍需网络。K8s 只在显式选择后替换渲染位置。
+新任务默认使用扩展后的 ProSceneverse 创作场景检索；显式 `--provider multi-source` 才轮流加入 ScanSceneverse 扫描场景，后者仍在小批验证。两者按 UID 在 Objaverse 真实路径索引解析 GLB。检索为室内、室外各10组，不使用历史 `catalog/` 作为默认来源，不依赖 Serper/Jina。来源记录不代表质量通过，详见[在线发现](AUTO_PIPELINE.md)。本地运行指调度与默认渲染的位置；素材下载和配置的远程模型服务仍需网络。K8s 只在显式选择后替换渲染位置。
 
 只有已有审核通过的原题时，才可选择添加 `--seed-campaign runs/originals` 加速；如需排除历史 UID，可添加 `--exclude-history historical-uids.jsonl`。两个参数均可省略，不是启动所需输入。
 
-已有原题是可选种子，不能用素材候选清单代替 `selected.jsonl`。启动器把源码和prompt存入 `<out>/runtime`，只复制Python和prompt文件，不复制凭据、原资产或.env；后续改主仓库不影响正在运行的批次。启动器保存账号指纹、PID和命令；不会把登录token复制到批次目录。重启同一个批次执行同一命令，会使用冻结版本。运行时不允许更换绑定的模型/provider配置、认证身份或修改冻结文件。后台启动器支持 `--model`、`--backend codex|relay|plugin`、`--reasoning`、`--render-backend local|k8s`，默认继承环境配置。见[模型接口](MODEL_INTERFACE.md)及[渲染配置](RENDERING.md)。
+已有原题是可选种子，不能用素材候选清单代替 `selected.jsonl`。启动器把源码和prompt存入 `<out>/runtime`，只复制Python和prompt文件，不复制凭据、原资产或.env；后续改主仓库不影响正在运行的批次。启动器保存账号指纹、PID和命令；不会把登录token复制到批次目录。重启同一个批次执行同一命令，会使用冻结版本。运行时不允许更换绑定的模型/provider配置、认证身份或修改冻结文件。后台启动器支持 `--model`、`--backend codex|relay|plugin`、`--reasoning`、`--render-backend local|k8s`，默认继承环境配置。素材可用 `--provider multi-source|prosceneverse-search|scansceneverse-search|prosceneverse` 选择；`--query` 可重复指定；单 GLB 上限 `--max-bytes` 默认64 MiB。来源、关键词和体积上限也绑定本批次，变更时使用新输出目录。见[模型接口](MODEL_INTERFACE.md)及[渲染配置](RENDERING.md)。
 
 前台入口（需自己保持进程运行）：
 

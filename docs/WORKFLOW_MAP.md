@@ -6,7 +6,7 @@
 
 | 阶段 | 统一命令 | 实现 | 输入 → 输出 |
 |---|---|---|---|
-| 在线发现 | 主线内部 / `auto` / `prepare` | `sources.py`、`live_sources.py` | 元数据 / 索引 → 可下载 URL、来源许可、UID |
+| 在线发现 | 主线内部 / `discover` / `auto` / `prepare` | `sources.py`、`live_sources.py`、`multi_sources.py`、`discovery.py` | 元数据 / 索引 → 可下载 URL、来源许可、UID |
 | 下载与证据 | `screen` | `screening/intake.py` | URL / 本地 GLB → 文件哈希、八视角、相机 |
 | 看图留删 | `screen` / `screen-images` | `screening/batch.py`、`rich.py` | 八视角 + 局部取景 → keep / reject / failed |
 | 原题及审核返修 | `qa` | `tools/scene_feedback_loop.py` | 场景 → 中等题、模型答案、相机、审核、交付 |
@@ -34,7 +34,7 @@ workflow CLI
        └─ KubernetesWorker                kubectl，明确 opt-in
 ```
 
-素材发现当前使用 ProSceneverse 在线索引检索并下载对应 Objaverse GLB，默认联网，不依赖旧素材池。“本地”是调度与渲染的位置，不表示离线生成。
+素材发现默认检索扩展后的 ProSceneverse；可选 `multi-source` 轮流检索 ProSceneverse、ScanSceneverse，并从实际 Objaverse 索引解析 GLB，预置20组室内外检索，不依赖 Serper/Jina 或旧素材池。`discover` 可单独保存发现清单，不渲染或调用模型。“本地”是调度与渲染的位置，不表示离线生成。
 
 模型与后端互不绑定；局部视角请求经 `screening/inspection.py` 串行调用相同渲染接口。GLB worker 可以单独上传，故导入前的执行位置检查保留在独立文件中。主调度模块不会导入 pyrender 或 bpy。
 
@@ -58,7 +58,7 @@ workflow CLI
 
 ## 配置、批次与交付
 
-`.env.example` 列出公开配置，私有凭据只在自己的环境 / Codex 目录。`workflow config` 只读展示模型名和渲染配置，不登录、不请求模型、不取景。后台启动器为新批次冻结 Python 与 Prompt；`runtime/` 不含 `.env`、原资产或模型凭据。
+`.env.example` 列出公开配置，私有凭据只在自己的环境 / Codex 目录。`workflow config` 只读展示模型名、渲染配置和素材来源，不登录、不请求模型、不取景。后台启动器为新批次冻结 Python 与 Prompt；`runtime/` 不含 `.env`、原资产或模型凭据。
 
 `summary.json` 是当前计数与阶段；`registry.jsonl` 是任务状态；`keep/reject/failed.jsonl` 分开记录成功、质量拒绝、执行失败；`delivery-manifest.jsonl` 指向审核通过的任务。`tasks/<uid>/<mode>/delivery` 包含 `scene.glb`、`start.png`、`task.json`、`answers.json`、`audit.json`。`originals/` 保留在线来源、筛选及原题闭环。
 

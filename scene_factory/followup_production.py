@@ -15,6 +15,7 @@ import time
 from types import SimpleNamespace
 
 from .automation import Campaign, REPO, STAGE_FILES, rows, save, write_rows
+from .sources import DEFAULT_PROVIDER, PROVIDERS, source_config
 from .model_backend import configured_model, model_identity as login_status
 from .rendering import render_settings
 from .followup import digest, evidence, review_accepted, run_case, validate_answers, validate_plan
@@ -146,6 +147,9 @@ class Production:
             "model_backend": os.getenv("SCENEQA_MODEL_BACKEND", "codex"), "render": render_settings(),
             "max_repairs": args.max_repairs, "inspection_rounds": args.inspection_rounds,
             "native_only": True, "max_bytes": args.max_bytes,
+            "source": source_config(provider=getattr(args, "provider", DEFAULT_PROVIDER),
+                queries=getattr(args, "queries", []), max_bytes=args.max_bytes,
+                max_scan=1_000_000, max_pages=100_000, page_size=60),
             "files": {f: digest(REPO / f) for f in sorted(set(STAGE_FILES + EXTRA_FILES))},
             "historical_exclusion_sha256": [digest(p) for p in args.exclude_history]}
         self.fingerprint = hashlib.sha256(json.dumps(protocol, sort_keys=True).encode()).hexdigest()
@@ -293,8 +297,9 @@ class Production:
     def make_stream(self):
         excluded = self.out / "seed-exclusions.jsonl"
         write_rows(excluded, [{"uid": r["uid"]} for r in self.seeds])
-        a = SimpleNamespace(out=self.out / "originals", provider="prosceneverse-search", catalog=None,
-            queries=[], max_bytes=self.args.max_bytes, max_scan=1_000_000,
+        a = SimpleNamespace(out=self.out / "originals",
+            provider=getattr(self.args, "provider", DEFAULT_PROVIDER), catalog=None,
+            queries=getattr(self.args, "queries", []), max_bytes=self.args.max_bytes, max_scan=1_000_000,
             max_pages=100_000, page_size=60, model=self.args.model,
             url=os.environ["LUNA_CHAT_URL"], max_repairs=2, key_file=None,
             workers=1, single_worker=True, stage_timeout=7200,
@@ -360,6 +365,10 @@ def main(argv=None):
     parser.add_argument("--exclude-history", type=Path, action="append", default=[])
     parser.add_argument("--max-scenes", type=int, default=10000)
     parser.add_argument("--max-bytes", type=int, default=64 * 1048576)
+    parser.add_argument("--provider", choices=[p for p in PROVIDERS if p != "catalog"],
+                        default=os.getenv("SCENEQA_SOURCE_PROVIDER", DEFAULT_PROVIDER))
+    parser.add_argument("--query", dest="queries", action="append", default=[],
+                        help="Optional metadata keywords (OR); applies to each source")
     parser.add_argument("--max-repairs", type=int, default=1)
     parser.add_argument("--inspection-rounds", type=int, default=2)
     parser.add_argument("--case-retries", type=int, default=2)

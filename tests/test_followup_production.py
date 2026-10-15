@@ -152,6 +152,19 @@ class ProductionTests(unittest.TestCase):
         self.assertEqual(result["kept"], 8)
         self.assertEqual(result["status"], "complete")
 
+    def test_source_selection_and_keywords_reach_the_original_stream(self):
+        received = []
+        def stream_factory(args, owner):
+            received.append(args)
+            return object()
+        production = self.production(args=self.args(provider="scansceneverse-search",
+            queries=["courtyard", "grocery"]), stream_factory=stream_factory)
+        production.make_stream()
+        self.assertEqual(received[0].provider, "scansceneverse-search")
+        self.assertEqual(received[0].queries, ["courtyard", "grocery"])
+        with self.assertRaisesRegex(ValueError, "protocol"):
+            self.production(args=self.args(provider="prosceneverse-search"))
+
     def test_source_exhaustion_is_not_success(self):
         write_rows(self.campaign / "selected.jsonl", [])
         class EmptyStream:

@@ -5,10 +5,10 @@ rows and cursor together before processing assets. Resume pending rows first;
 pass all already decided UIDs through ``excluded_uids``. An exception leaves the
 input cursor untouched and must be treated as infrastructure failure, not reject.
 
-The default provider reads public ProSceneverse dataset-viewer pages and joins
-them with Objaverse's public GLB path index. Individual asset licenses and author
-fields are retained; a dataset license is never substituted for an asset license.
-Only requests and the Python standard library are required.
+Online search reads ProSceneverse and optionally ScanSceneverse metadata, then
+joins it with Objaverse's public GLB path index. Individual asset licenses and
+author fields are retained; a dataset license never replaces an asset license.
+The older dataset-viewer provider needs requests only; search also needs pyarrow.
 """
 from __future__ import annotations
 
@@ -27,7 +27,10 @@ from urllib.parse import urlencode, urlparse
 
 import requests
 
-PROTOCOL = "sceneqa-discovery-v2-model-screen"
+PROTOCOL = "sceneqa-discovery-v3-multi-source"
+DEFAULT_PROVIDER = "prosceneverse-search"
+SEARCH_PROVIDERS = ("prosceneverse-search", "scansceneverse-search")
+PROVIDERS = ("multi-source", *SEARCH_PROVIDERS, "prosceneverse", "catalog")
 DATASET = "Stable-X/ProSceneverse"
 ROWS_URL = "https://datasets-server.huggingface.co/rows"
 OBJAVERSE_BASE = "https://huggingface.co/datasets/allenai/objaverse/resolve/main/"
@@ -35,6 +38,7 @@ PATHS_URL = OBJAVERSE_BASE + "object-paths.json.gz"
 SAFE_UID = re.compile(r"[A-Za-z0-9_-]{1,80}\Z")
 SIZE_FIELDS = ("size_bytes", "bytes", "file_size_bytes", "glb_size_bytes",
                "fileSize", "size", "glb_bytes", "asset_bytes")
+_INDEX_CACHE = {}  # One verified immutable index, shared across source adapters.
 
 
 class DiscoveryError(RuntimeError):
@@ -163,12 +167,19 @@ def _paths(cache_dir: Path) -> tuple[dict, str]:
         except (ValueError, OSError) as exc:
             raise DiscoveryError("Invalid Objaverse path index") from exc
         _atomic(path, data)
+        _INDEX_CACHE.clear()
+        _INDEX_CACHE[hashlib.sha256(data).hexdigest()] = decoded
     try:
         data = path.read_bytes()
-        decoded = json.loads(gzip.decompress(data))
+        digest = hashlib.sha256(data).hexdigest()
+        decoded = _INDEX_CACHE.get(digest)
+        if decoded is None:
+            decoded = json.loads(gzip.decompress(data))
         if not isinstance(decoded, dict):
             raise ValueError("Path index must be an object")
-        return decoded, hashlib.sha256(data).hexdigest()
+        _INDEX_CACHE.clear()
+        _INDEX_CACHE[digest] = decoded
+        return decoded, digest
     except (OSError, ValueError) as exc:
         raise DiscoveryError(f"Invalid cached Objaverse path index: {path}") from exc
 
@@ -226,12 +237,23 @@ def source_config(*, provider: str = "prosceneverse", catalog: Path | None = Non
             config["catalog_sha256"] = hashlib.sha256(Path(catalog).read_bytes()).hexdigest()
         except OSError as exc:
             raise DiscoveryError(f"Unreadable JSONL catalog: {catalog}") from exc
-    elif provider == "prosceneverse-search":
-        from .live_sources import groups, SNAPSHOT_URL
-        config["search_groups"] = groups(config["queries"])
+    elif provider in SEARCH_PROVIDERS:
+        from .live_sources import groups, LIVE_PROFILES
+        config["search_groups"] = [[name, list(terms)] for name, terms in groups(config["queries"])]
         config["search_transport"] = "fresh_metadata_snapshot_v1"
-        config["metadata_url"] = SNAPSHOT_URL
-        config["glb_resolution"] = "objaverse_object_paths_index_v1"
+        config.update(LIVE_PROFILES[provider])
+    elif provider == "multi-source":
+        config.pop("dataset", None)
+        config["mixing"] = "round_robin_unique_uid_v1"
+        config["sources"] = []
+        for index, child in enumerate(SEARCH_PROVIDERS):
+            # Explicit per-source windows keep aggregate scan/page budgets bounded.
+            scans = max_scan // len(SEARCH_PROVIDERS) + (index < max_scan % len(SEARCH_PROVIDERS))
+            pages = max_pages // len(SEARCH_PROVIDERS) + (index < max_pages % len(SEARCH_PROVIDERS))
+            if scans and pages:
+                config["sources"].append(source_config(provider=child, queries=queries,
+                    max_bytes=max_bytes, max_scan=scans, max_pages=pages, page_size=page_size))
+        config["budget_limited_sources"] = len(config["sources"]) < len(SEARCH_PROVIDERS)
     return config
 
 
@@ -264,14 +286,17 @@ def discover_batch(cache_dir: Path, limit: int, cursor: dict | None = None, *,
     excluded = set(excluded_uids or ())
     if catalog is not None:
         provider = "catalog"
-    if provider not in ("catalog", "prosceneverse", "prosceneverse-search"):
+    if provider not in PROVIDERS:
         raise ValueError(f"Unknown discovery provider: {provider}")
     if provider == "catalog" and catalog is None:
         raise ValueError("catalog provider requires a JSONL catalog path")
     config = source_config(provider=provider, catalog=catalog, queries=queries,
                            max_bytes=max_bytes, max_faces=max_faces, max_scan=max_scan,
                            max_pages=max_pages, page_size=page_size)
-    if provider == "prosceneverse-search":
+    if provider == "multi-source":
+        from .multi_sources import discover_multi
+        return discover_multi(cache_dir, limit, cursor, config=config, excluded_uids=excluded)
+    if provider in SEARCH_PROVIDERS:
         from .live_sources import discover_live
         return discover_live(cache_dir, limit, cursor, config=config, excluded_uids=excluded)
     catalog_rows = None
