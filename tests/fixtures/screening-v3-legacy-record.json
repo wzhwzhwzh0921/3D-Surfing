@@ -1,0 +1,25 @@
+{
+  "uid": "legacy-cache",
+  "status": "ok",
+  "model": "fixture-model",
+  "fingerprint": "3e9ca2dd4651e17d2d12ef44b77ef607c4182bb66e1d1f1e954f6a2f87e67144",
+  "machine_only": true,
+  "endpoint": "https://judge.invalid/v1/chat/completions",
+  "cached": false,
+  "usage": [
+    {
+      "prompt_tokens": 100,
+      "completion_tokens": 10
+    }
+  ],
+  "errors": [],
+  "attempts": 1,
+  "served_model": "fixture-model",
+  "judgment": {
+    "uid": "legacy-cache",
+    "decision": "keep",
+    "reason": "旧版已完成的筛选记录"
+  },
+  "source": {},
+  "elapsed_seconds": 0.0
+}

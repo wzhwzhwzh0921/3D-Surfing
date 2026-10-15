@@ -1,117 +1,178 @@
-# Scene QA Factory / 3D 场景探索问答生成
+# 3D-Surfing：场景探索问答 Pipeline
 
-给定一个可下载的 `.glb` URL，本仓库默认用**一次 Claude Code + DeepSeek Flash 会话**规划同一原场景的三次独立增强，并交付三套 `(scene.glb, question, model_answer, starting camera)`。题型与难度正交：定义 **10 类题 × 3 档难度**，单场景仍只出简单、中等、困难各一题。题型顺序由场景 ID 和种子可复现地随机产生，模型从可行题型里选三种。简单题起始证据不可见；中等题有近处明显遮挡；困难题先按线索找对地标，再绕开局部遮挡。具体 30 个组合见 [题型矩阵](docs/QUESTION_TYPES.md)。
+从带材质的 GLB 场景生成需要转动视角、换焦或放大观察的问答任务。支持在线找素材，也支持输入自己的 URL / 本地 GLB；筛选、出题、作答、审核、返修均保留记录。
 
-新流程在这一次会话内先提出**每档两道候选题**，用轻量的 `probe` 扫描起始机位：地标必须能看见且足够大、目标答案须隐藏、中难档的真实第一遮挡物须符合要求。模型查看六道候选的截图后，每档选一道正式构建。最终另有按题型共同取景的 `answer_view.png`，帮助数数量或判断方位。协议见[候选题与机位探测](docs/CANDIDATE_PROBE.md)。
+**默认在本地运行和渲染。K8s 是可选渲染后端，不是流程依赖；模型名称、Codex provider 与渲染后端分别配置。** 当前 GLB 主线使用 `trimesh + pyrender` 离屏渲染，不要求安装 Blender 桌面版。早期 `.blend` / Claude Code 实验仍保留，见[历史说明](docs/LEGACY_CLAUDE_DEEPSEEK.md)。
 
-当前输入索引 `catalog/qualified.jsonl` 含 **1,654 个**先前筛选的 GLB 地址（简单 1,240 / 复杂 414），只保存链接和许可等元数据，不把大型资产提交到仓库。每条记录的 `license` 保留原始许可，分发增强资产前需按原许可核查。
+## 流程与输入输出
+
+```mermaid
+flowchart TD
+  A[在线发现素材 / 输入 URL 或本地 GLB] --> B[下载、文件检查、体积限制、去重]
+  B --> C[渲染八视角及模型请求的局部视角]
+  C --> D{模型看图筛选}
+  D -->|留| E[生成原景中等题、模型作答]
+  D -->|删| R[reject 清单]
+  E --> F{独立上下文审核}
+  F -->|返修| E
+  F -->|通过| G[原题交付]
+  G --> H[用户追加需求：bundle / chain]
+  H --> I[补充取景、作答、审核、必要时返修]
+  I --> J[场景 + 初始相机 + 题目 + 答案 + 审核证据]
+  C -.-> K[RenderWorker：local / k8s]
+  D -.-> M[ModelBackend：Codex / 自定义适配器 / HTTP API]
+  E -.-> M
+  H -.-> M
+```
+
+| 阶段 | 输入 | 输出 / 入口 |
+|---|---|---|
+| 发现与下载 | 在线元数据，或 JSONL 中的 `url` / `source_glb` | 本地 GLB、来源、作者、许可证；`auto` / `screen` |
+| 场景筛选 | GLB、标准视角、按需局部图 | `keep.jsonl` / `reject.jsonl` / `failed.jsonl`；`screen` |
+| 原题生产 | 筛选保留的场景 | 中等题、模型答案、初始相机、审核与返修记录；`qa` |
+| 二次增难 | 已审核原题的 `selected.jsonl` | `bundle` 或 `chain`；`followup` |
+| 连续生产 | 目标数量、可选原题种子 | 自动补充素材与原题，累计审核通过的完整任务；`followup-batch` |
+| 展示 | 交付与证据 | 本地 `gallery.html`；可选 `tools/export_followup_batch.py` 导出静态网站 |
+
+`bundle` 保留原题并增加两个不同目标的问题，三个答案必须全对。`chain` 保留原题，再做两跳相互依赖的空间定位，交付要求回答原题、两步选择和最终属性。子问题不拆开重复计数。默认 200 题为两类各 100；每类室内、室外各 50，按模型观察确认环境标签。见[增难规则](docs/USER_FOLLOWUP.md)与[批量说明](docs/FOLLOWUP_BATCH.md)。
 
 ## 安装与配置
 
-需要 Python 3.10+、Blender 5.x 和 Claude Code CLI。部署机器要有足够空间保存下载的原件和三份输出。凭据只通过环境变量或仓库外的 `--key-file` 传入，不会写入计划或产物；`api_usage.jsonl` 记录 token、cache 和重试统计，不含 API key。
+需要 Python 3.10+。请使用完整源码仓库及 editable 安装，部分主线实现仍调用 `tools/` 和 `experiments/sol_augment/`。
+
+本仓库包含运行所需的 Python 代码、Prompt、worker 和一个小型渲染测试 GLB，不依赖开发机上的其他项目或既有场景目录。模型服务/凭据、Codex CLI、系统图形驱动属于外部运行条件；在线发现素材时还需要网络。数据集和模型权重不打包进代码仓库。当前支持整仓库克隆后 `pip install -e ...`，尚不支持把单独 wheel 脱离源码目录运行。
 
 ```bash
-git clone https://github.com/wzhwzhwzh0921/3D-Surfing.git
-cd 3D-Surfing
 python3 -m venv .venv
-.venv/bin/pip install -e .
+.venv/bin/pip install -e '.[batch,render]'
 cp .env.example .env
-# 在 .env 中填写 TOKENHUB_API_KEY 和本机 Blender 绝对路径
-set -a; source .env; set +a
-.venv/bin/sceneqa doctor
+# 编辑 .env 后加载；程序不会自动读取它。
+set -a
+source .env
+set +a
+.venv/bin/sceneqa workflow config
+.venv/bin/sceneqa workflow list
 ```
 
-默认使用测试过的 TokenHub `https://tokenhub.tencentmaas.com/v1/chat/completions` 和 `deepseek/deepseek-flash`。仓库自带本地协议桥，把 Claude Code 的 Anthropic Messages 请求转成 TokenHub 的 OpenAI Chat Completions 请求，包含图片、工具调用、流式响应和缓存统计。也可使用官方 DeepSeek：`--provider deepseek`，并设置 `DEEPSEEK_API_KEY`；其 Anthropic 兼容根地址为 `https://api.deepseek.com/anthropic`，模型名为 `deepseek-flash`。两个网关均对 429/5xx 重试，单次响应输出上限设为 65,536 tokens，未设置轮次限制。网关的 cache 命中率依据上游 usage 字段计算；若上游未返回缓存字段，报告为未知。真实上游 key 只保留在本地网关进程，不传给可执行 Bash 的 Claude Code 子进程。默认每个场景只运行一次生成会话；开启可选监督循环时，还会增加独立审核和最多两轮定点返修会话。失败及返修日志均保留供续跑或人工处理。
+Linux 离屏渲染需要可用的 EGL / OpenGL 驱动；无显示器不需要打开桌面。Ubuntu 可先安装 `libegl1 libgl1 libgl1-mesa-dri libglib2.0-0`；也可配置 OSMesa。依赖、线程限制、独立渲染 Python 及排错见[渲染后端](docs/RENDERING.md)。
 
-## 单条与批量运行
+默认模型后端是 Codex CLI，使用 `codex login` 登录的 ChatGPT 账号；示例模型是之前测试的 `gpt-6.1-sol`，可以替换。订阅模式先运行 `codex login status`。模型不在本机推理，本地负责调度与渲染。
+
+安装后可先做**不调用模型、不下载素材**的渲染自检；此命令会实际执行配置后端的 3D 渲染：
 
 ```bash
-sceneqa run --url 'https://example.org/scene.glb' --output-root /data/sceneqa-runs
-sceneqa run --uid 0db322fa7a614975b83753a37c4e7350 --output-root /data/sceneqa-runs
-sceneqa run --input-path /data/source.glb --output-root /data/sceneqa-runs
-sceneqa batch --catalog catalog/qualified.jsonl --tier simple --offset 0 --limit 20 --workers 2 --output-root /data/sceneqa-runs
-sceneqa list --tier complex --limit 10
-sceneqa types --scene-id a450b90cb444431d93c6e4bab70fa233 --seed 0
-sceneqa probe --source /data/source.glb --candidates /data/candidates.json --output /data/probe
-sceneqa select --candidates /data/candidates.json --probe-report /data/probe/probe_report.json --simple simple_a --medium medium_b --hard hard_a --output /data/plan.json
+.venv/bin/sceneqa workflow smoke --out runs/render-smoke
 ```
 
-`.env` 不会自动加载，必须先 `source`；若 key 存在私有文件中，可用 `--key-file /private/path/key.txt`，支持纯 key 文件或包含 `TOKENHUB_API_KEY=` / `TENCENT_ENDPOINT_API_KEY=` 的 `.env`。不要把私有文件放进本仓库。
+通过时生成 8 张标准视角、8 张原景输出视角、1 张换焦/旋转/缩放局部图，并核对原 GLB 字节未变；结果记录在 `summary.json`。这个检查验证渲染和文件交付，不评价模型出题质量。[独立安装、软件渲染及模型图像调用的验证记录](docs/PORTABILITY_CHECK.md)。
 
-`run` 支持 `--input-path` 本地 GLB 和 `--dry-run`，后者只做源资产预检和四张彩色预览，不调用模型。设置 `SCENEQA_QUESTION_SEED` 可改变可复现的题型顺序；模型可跳过不适合当前场景的题型，并在 `agent_notes.md` 说明原因。`batch` 默认一个 worker，最多四个，并按 `uid` 续跑：已有 `candidate`、`needs_review`、`visual_needs_review`、`visual_rejected`、`supervisor_needs_review` 或 `supervisor_rejected` 结果会跳过；失败项保留 `status.json`、日志和中间产物。源下载有大小上限（默认 100 MB）、SHA256、GLB v2 头检查、断点式缓存与 429/5xx 重试。批量运行可用 `--max-bytes` 调整上限。
+## 接入自己的模型
 
-若原场景缺少至少两类可自然重复的小物件，或缺少困难题所需的两个可区分地标，agent 应生成 `unsuitable.json` 记录原因，批量结果标为 `unsuitable`，而不是复制房屋、横梁或地面凑题。目录筛选的“可下载、场景复杂度合适”不等同于“适合三道探索题”；这一判断也是正式入库前的人工复核项。
+三个常用方式，均保持同一 pipeline：
 
-单场景的输出：
+| 方式 | 配置 | 适用情况 |
+|---|---|---|
+| Codex + ChatGPT 登录 | `SCENEQA_MODEL_BACKEND=codex`、`SCENEQA_CODEX_AUTH=chatgpt`、`SCENEQA_MODEL=你的模型名` | 使用订阅账号可用的模型 |
+| Codex + 自定义 provider | `SCENEQA_MODEL_BACKEND=codex`、`SCENEQA_CODEX_AUTH=configured`、`SCENEQA_MODEL=你的模型名` | 读取你自己的 Codex 配置和 provider 凭据，不强制 OpenAI provider 或 ChatGPT 登录 |
+| 直接调用兼容 HTTP API | `SCENEQA_MODEL_BACKEND=relay`、`SCENEQA_API_URL`、`SCENEQA_API_KEY`、`SCENEQA_MODEL` | 仅有多模态 `chat/completions` 接口，暂不经 Codex |
+
+自定义 Codex provider 示例在 [examples/codex-provider.example.toml](examples/codex-provider.example.toml)。按 [Codex 官方配置文档](https://learn.chatgpt.com/docs/config-file/config-advanced#custom-model-providers)配置 Responses 协议、模型及认证，再设置：
+
+```bash
+export SCENEQA_CODEX_AUTH=configured
+export SCENEQA_CODEX_PROVIDER=sceneqa_custom
+export SCENEQA_MODEL=your-vision-model
+export SCENEQA_CODEX_REASONING=inherit
+# 在私有环境中设置 provider 使用的密钥，不写进仓库。
+```
+
+需要模型支持多图输入与结构化输出；`chat/completions` 地址不能直接当作 Codex 的 Responses provider。`inherit` 表示不额外覆盖推理档位。也预留了 `ModelBackend.complete(payload)` 插件接口；接入示例、输入输出协议、缓存与凭据处理见[模型接口](docs/MODEL_INTERFACE.md)。
+
+## 从一批自己的场景试跑
+
+创建 `sources.jsonl`，每行一个场景，`uid` 唯一：
+
+```json
+{"uid":"scene_001","url":"https://example.org/scene.glb"}
+{"uid":"scene_002","source_glb":"/absolute/path/to/scene.glb"}
+```
+
+替换示例路径或 URL 后执行：
+
+```bash
+.venv/bin/sceneqa workflow screen --sources sources.jsonl --out runs/screen
+.venv/bin/sceneqa workflow qa --sources runs/screen/keep.jsonl --out runs/qa
+```
+
+筛选由模型观察内容丰富度、可探索区域和出题机会；文件对象数不直接等于有用内容数。`keep` / `reject` 只记录清单，不删除原资产；下载、接口、渲染或格式错误记入 `failed`，不当作质量淘汰。默认文件上限 64 MiB，可通过各入口 `--max-bytes` 调整。见[筛选规则](docs/SCREENING_RULES.md)。
+
+端到端生成原题：
+
+```bash
+.venv/bin/sceneqa workflow auto --out runs/originals --target 10 --max-scenes 200
+```
+
+随后基于审核通过的原题追加需求：
+
+```bash
+.venv/bin/sceneqa workflow followup \
+  --campaign runs/originals --out runs/followup --limit 4 --modes bundle chain
+```
+
+后台连续生产 200 题（种子原题可省略，不足时自动在线补充）：
+
+```bash
+.venv/bin/python tools/start_followup_batch.py \
+  --out runs/followup-200 --target 200 \
+  --seed-campaign runs/originals
+```
+
+默认本地串行渲染、单个 Codex 模型调用。先用小目标确认自己的驱动和模型兼容性，再扩大目标。`summary.json` 显示真实完成数；达到审核通过数量才成功，来源耗尽或预算不足会明确记为未完成。429、5xx、超时重试与断点续跑已保留。建立输出目录下的 `STOP` 文件可在安全检查点停止，删除后用同一配置续跑。
+
+## 可选：使用 K8s 渲染
+
+K8s 仅替换 `RenderWorker` 的执行位置：上传同一 worker 和 GLB，取回同格式图片、相机及清单；模型调用、筛选和出题仍由 pipeline 调度。不部署专用服务，不依赖我们的命名空间、私有镜像或模型 Secret。
+
+```bash
+export SCENEQA_RENDER_BACKEND=k8s
+export SCENEQA_NAMESPACE=your-namespace
+export SCENEQA_RENDER_IMAGE=your-registry/sceneqa-render:tag
+# 私有镜像需要时设置：
+# export SCENEQA_IMAGE_PULL_SECRET=your-pull-secret
+.venv/bin/sceneqa workflow auto --out runs/k8s-originals --target 10
+```
+
+默认请求 1 张 GPU，可配置为 0，但镜像必须具有可用的软件 OpenGL 驱动。仓库提供 [deploy/render/Dockerfile](deploy/render/Dockerfile) 作为镜像起点。集群失败不会静默改成本地渲染。配置表及部署要求见[渲染后端](docs/RENDERING.md)。
+
+## 交付、Prompt 与代码位置
+
+每份复合任务的 `delivery/`：
 
 ```text
-runs/<uid>/
-  source.glb                  原始资产
-  inspect/inventory.json      网格名、包围盒和材质
-  inspect/source_*.png        四个原始场景视角
-  candidates.json             六道候选题，每档两道
-  probe/probe_report.json     起始机位可见性与遮挡扫描
-  probe/<candidate_id>/start_*.png  候选起始图
-  plan.json                   单次 agent 会话设计的三档计划
-  agent_notes.md              模型对场景自然性的说明
-  output/build_report.json    导出物件及起始/探测视角证据
-  output/validation.json      模型答案、结构检查和通过/失败原因
-  output/{simple,medium,hard}/scene.glb
-  output/{simple,medium,hard}/start.png
-  output/{simple,medium,hard}/reveal.png  揭示视角
-  output/{simple,medium,hard}/detail.png  目标局部视角
-  output/{simple,medium,hard}/answer_view.png  题目所需证据同框视角
-  api_usage.jsonl             逐次 API 尝试和缓存统计
-  status.json                 续跑状态
+scene.glb       原场景，保留材质
+start.png       初始视角
+task.json      解题侧输入：原题、追加需求、相机、逐项作答要求
+answers.json    评估侧模型答案
+audit.json     独立上下文审核记录
 ```
 
-生成本地审查页：
+`task.json` 不含答案和内部候选；不要把 `answers.json`、`audit.json` 给解题模型。原题阶段另有 `question.json`、`reveal.png`。原始素材、按需取景、逐轮响应和返修过程保存在输出目录，见[代码与文件地图](docs/WORKFLOW_MAP.md)。
+
+- `scene_factory/workflow.py`：统一 CLI；`automation.py` / `followup_production.py`：生产编排。
+- `scene_factory/model_backend.py` / `codex_backend.py`：模型接口与 Codex 适配。
+- `scene_factory/rendering.py`：本地 / K8s 渲染后端；`screening/inspection.py`：模型请求的相机取景。
+- `scene_factory/screening/prompts/v5.txt`：当前场景筛选 Prompt。
+- `scene_factory/prompts/followup_*_zh.txt`：追加需求、作答、审核 Prompt。
+- 原题与返修 Prompt 目前在 `experiments/sol_augment/run.py`、`repair_medium.py`；独立原题审核在 `tools/independent_qa_audit.py`。
+
+审核与作答默认是同一模型的独立上下文，审核能看到候选答案，尚非盲审；通过不等于人工 gold，也不保证必须操作固定轮数。保留率、语义答案正确率和实际解题难度需分别衡量。
+
+## 开发与版本隔离
 
 ```bash
-sceneqa report --work /data/sceneqa-runs/<uid> --output /data/sceneqa-runs/<uid>/review.html
-cd /data/sceneqa-runs/<uid> && python3 -m http.server 8000
+.venv/bin/python -m unittest discover -s tests -q
 ```
 
-打开 `http://localhost:8000/review.html`，可以旋转三档 GLB、查看起始截图与答案状态。网页通过 CDN 加载 `<model-viewer>`；离线环境仍可查看截图和下载模型。
+回归测试使用 mock 模型、mock 集群和轻量文件 fixture，不启动真实 3D 渲染或调用付费模型。`workflow config/list/--help` 同样不执行渲染。
 
-## 质量边界
-
-新版 `1.3` 要求三题类型不同，并验证起始遮挡、局部遮挡及困难题的最近地标线索。`candidate_probe_v1` 还要求先查看六个候选预览、选用探测通过的机位，再检查每档 `start/reveal/detail/answer_view.png`；程序核对 Claude Code 的图片读取记录，随后由模型自行给出或修正三道题的答案。**程序不计算、不核对任何题目的答案**；`validation.json` 中的 `answer.source` 为 `model_visual`，`answer_verified` 为 `false`。复制对象只能来自原场景，并用支撑网格向下射线定位；导出保留原几何与材质。具体字段见 [计划协议](docs/PLAN_SCHEMA.md)。
-
-`validation.json` 的 `candidate` 只表示三份模型和预设的结构/视角条件通过检查；`status.json` 的 `candidate` 还要求模型自评三题均为 `pass`。两者都**不表示模型答案正确或已认证为 benchmark gold**。程序无法仅凭 GLB 证明原场景同类物件清点完整、摆放符合语境，或一道题真的需要 30 次操作。若未来要发布严格题库，再对答案抽样复核并运行盲测 agent；当前流水线按你的要求保留模型自行作答的结果。
-
-生成提示词还要求模型逐档查看 `start/reveal/detail/answer_view.png` 并做语义自查：起始图及同款原物件是否泄露答案，揭示图是否清楚露出关键形状或颜色，题目指向的地标与方位是否唯一，以及复制件是否自然地落在场景里。发现捷径或歧义时，应修改候选题、摆放或相机后重新探测和构建，并在 `agent_notes.md` 记录每档的证据与残留疑点。这些是提示词要求，不是自动判真值；正式题库仍需人工审阅和盲测。
-
-模型还需写 `visual_quality.json`，逐档给出 `pass`、`review` 或 `fail` 和原因。`review` 用于画面基本有证据、但物件身份或取景仍有具体疑点的题，整组状态为 `visual_needs_review`，保留已通过的档位供后续修题或人工复核，不能直接入库；明确不可解或有答案捷径时用 `fail`，整组标为 `visual_rejected`。三档都 `pass` 才能得到结构性 `candidate`；缺少自查文件为 `needs_review`。这只是保留模型自己的看图结论，并不自动核验答案。
-
-三档最低解题过程、轻度遮挡的准入条件以及 `pass/review/fail` 的具体边界见[难度与视觉审核协议](docs/REVIEW_POLICY.md)。
-
-`batch` 摘要同时统计场景状态和 `tier_pass/tier_review/tier_fail`，便于看到一组场景被拒绝时仍有多少单题可用；`report` 页面逐题显示自评状态与原因。
-
-可选的[独立监督与定点返修循环](docs/SUPERVISOR_LOOP.md)让只读图像的第二次模型调用逐题找缺陷，最多再做两轮定点返修与复审。默认关闭；运行前应在小规模人工审核样本上验证其误收率与成本。
-
-人工审核可用 [`audit-template`、`audit-review` 与 `audit-evaluate`](docs/CALIBRATION.md)逐题查看 GLB、导出 gold 标签，并测量监督者误收、弃判和样本覆盖；旧标签绑定原题、GLB 与证据图，返修后不会继续计入统计。
-
-需要检验实际探索过程时，可用 [`blind-review`、`blind-run`、`blind-summarize` 与 `blind-gallery`](docs/BLIND_TRIAL.md)生成只含题目和 3D 场景的工具操作页，或让模型经受控截图/相机工具自主盲解，再汇总轨迹、独立答案和待复核冲突。网页使用透视相机，和 Blender 正交起始图属于不同渲染协议；轨迹操作数不自动等于难度或答案正确率。
-
-首轮审核可用 `sceneqa audit-sample` 按来源难度和室内/室外分类抽样，再用 `sceneqa batch --dry-run` 生成原场景预览，最后用 `sceneqa audit-gallery` 汇总四视角。仓库保存了[20 场景抽样与预检记录](docs/AUDIT_PILOT_2026-09-26.md)；这些场景已验证可下载和渲染，尚未生成三档问答，也未经过人工入库审核。
-
-若改用 Codex Sol 逐场景手工调用，使用[单场景任务模板](docs/CODEX_SOL_TASK.md)，每次替换源 GLB、工作目录和仓库路径；该模板包含相同的反捷径与视觉复核要求。
-
-实际试跑和失败案例见 [验证记录](docs/SMOKE_TEST_2026-09-24.md)。旧版 `1.2` 已完成真实 GLB 的 DeepSeek 单会话交付；新版 `1.3` 的三档构建/校验和 DeepSeek 独立看图作答分别测过，但**新版全流程单会话尚未成功跑通**，不应按生产稳定性看待。
-
-候选探测 → 三题选择 → Blender 构建 → 结构校验已用真实 GLB 跑通，详见[新版流程冒烟记录](docs/CANDIDATE_PROBE_SMOKE.md)。DeepSeek/Claude Code 单会话和视觉入库率尚待实跑，不能据此宣称拒收率已降低。
-
-Codex Sol xhigh 的三个逐场景复核及本次提示词调整见 [2026-09-25 迭代记录](docs/ITERATIONS_2026-09-25.md)。其可视化审查页在工作区 `../scene-qa-runs/iterations-2026-09-25/index.html`；本轮的两个构建案例都未通过三档视觉复核，不能当作正式题库样本。
-
-## 开发验证
-
-```bash
-python3 -m unittest discover -s tests -v
-sceneqa build --source examples/fixtures/hidden.glb --plan examples/sample_plan.json --output /data/sceneqa-sample
-sceneqa verify --plan examples/sample_plan.json --output /data/sceneqa-sample
-```
-
-`examples/fixtures/hidden.glb` 是仓库自制的 6 KB 遮挡示例，可用来验证三档构建与可见性门槛，不代表正式题库质量。
-
-源码和索引可以独立发布；`runs/`、模型文件和 `.env` 默认不会进入 Git。授权内容和生成资产应存对象存储，再由审查页或题库索引引用。公开发布前还应确认使用的 GLB 许可允许对应再分发。
+后台批次冻结代码和 Prompt，绑定模型 / provider 身份、渲染配置和证据哈希。改模型、后端或协议后请使用新的输出目录；旧批次继续用其 `runtime/` 或 `workflow_snapshot/`，不要删除指纹强行续跑。当前机器上已有的 K8s 生产批次保留其原快照，本仓库的新默认值不会改变它。

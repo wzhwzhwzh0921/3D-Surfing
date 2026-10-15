@@ -1,4 +1,4 @@
-"""Command-line interface for reproducible URL-to-three-scene production."""
+"""Current repository workflows and earlier scene QA command-line tools."""
 from __future__ import annotations
 
 import argparse
@@ -209,11 +209,16 @@ def parser() -> argparse.ArgumentParser:
     gallery = sub.add_parser("report")
     gallery.add_argument("--work", type=Path, required=True)
     gallery.add_argument("--output", type=Path, required=True)
+    sub.add_parser("workflow", help="现行筛选、出题、审核及批量生产入口", add_help=False)
     return p
 
 
-def main() -> None:
-    a = parser().parse_args()
+def main(argv: list[str] | None = None) -> int | None:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "workflow":
+        from .workflow import main as workflow_main
+        return workflow_main(argv[1:])
+    a = parser().parse_args(argv)
     try:
         if a.command == "doctor":
             from .runner import blender_exe

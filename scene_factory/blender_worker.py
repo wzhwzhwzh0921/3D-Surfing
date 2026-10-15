@@ -6,7 +6,15 @@ import json
 import hashlib
 import math
 import sys
+import os
 from pathlib import Path
+
+# Standalone workers are uploaded as snapshots, without package dependencies.
+_backend = os.getenv('SCENEQA_RENDER_BACKEND', 'local')
+if _backend not in ('local', 'k8s'):
+    raise RuntimeError('SCENEQA_RENDER_BACKEND must be local or k8s')
+if _backend == 'k8s' and (not os.environ.get('KUBERNETES_SERVICE_HOST') or not Path('/var/run/secrets/kubernetes.io/serviceaccount/namespace').is_file()):
+    raise RuntimeError('K8s rendering was selected; this worker must run in Kubernetes. No local fallback.')
 
 import bpy
 from mathutils import Matrix, Vector

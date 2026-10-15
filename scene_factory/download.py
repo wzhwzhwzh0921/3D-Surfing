@@ -41,7 +41,7 @@ def download(url: str, target: Path, *, max_bytes: int = 100_000_000,
         try:
             with requests.get(url, stream=True, timeout=(20, 120)) as response:
                 if response.status_code in (429, 500, 502, 503, 504):
-                    raise requests.HTTPError(f"Retryable HTTP {response.status_code}")
+                    raise requests.HTTPError(f"Retryable HTTP {response.status_code}", response=response)
                 response.raise_for_status()
                 declared = int(response.headers.get("Content-Length", "0"))
                 if declared > max_bytes:
@@ -61,8 +61,11 @@ def download(url: str, target: Path, *, max_bytes: int = 100_000_000,
                 raise ValueError("SHA256 mismatch")
             os.replace(partial, target)
             return {"path": str(target), "bytes": total, "sha256": sha, "cached": False}
-        except (requests.RequestException, OSError):
+        except (requests.RequestException, OSError) as error:
             partial.unlink(missing_ok=True)
+            status = getattr(getattr(error, "response", None), "status_code", None)
+            if status is not None and 400 <= status < 500 and status != 429:
+                raise
             if attempt >= retries:
                 raise
             time.sleep(min(2 ** attempt * 5, 40))

@@ -1,0 +1,43 @@
+# 连续批量追加需求生产
+
+本轮目标是200份审核通过的复合任务，`bundle`、`chain`各100份；每类各50份室外、50份室内，标签由筛选模型看真实图片确认。每份任务对应一个GLB、固定初始相机、用户原题、用户追加需求和完整答案。子问题不拆开重复计数。一个原题最多产出两份不同模式的任务，所以至少需要100个不同场景；同文件哈希的不同UID不会重复出题。
+
+流程：新线上素材 → 下载 → 八视角及模型局部取证（本地默认，K8s可选） → v5模型留/删 → 原景中等原题及审核 → 用户追加需求 → 图片作答 → 独立上下文审核 → 返修一次或剔除。原题不足会继续寻找新场景，不复用已否决的历史池。素材发现保留作者、原网址和单资产许可证；历史UID只作排除清单。
+
+本生产入口的原题也不增删物件，`copies=[]`。追加阶段保留原题文字、场景和初始相机。不同模式的标准见[用户追加增难](USER_FOLLOWUP.md)。两跳交付要求提交 `original/h1/h2/final`；多目标提交 `original/extra_1/extra_2`，任意要求错误则整份任务不通过。
+
+后台启动，使用配置的模型后端，默认是当前本机Codex的ChatGPT账号及示例模型 `gpt-6.1-sol`、`xhigh`：
+
+```bash
+python tools/start_followup_batch.py \
+  --out /data/followup-200 --target 200 \
+  --seed-campaign /data/reviewed-fresh-originals \
+  --exclude-history /data/historical-uids.jsonl
+```
+
+已有原题是可选种子，不能用素材候选清单代替 `selected.jsonl`。启动器把源码和prompt存入 `<out>/runtime`，只复制Python和prompt文件，不复制凭据、原资产或.env；后续改主仓库不影响正在运行的批次。启动器保存账号指纹、PID和命令；不会把登录token复制到批次目录。重启同一个批次执行同一命令，会使用冻结版本。运行时不允许更换绑定的模型/provider配置、认证身份或修改冻结文件。后台启动器支持 `--model`、`--backend codex|relay|plugin`、`--reasoning`、`--render-backend local|k8s`，默认继承环境配置。见[模型接口](MODEL_INTERFACE.md)及[渲染配置](RENDERING.md)。
+
+前台入口（需自己保持进程运行）：
+
+```bash
+python -m scene_factory workflow followup-batch \
+  --out /data/followup-200 --target 200 --watch
+```
+
+请求429、5xx和超时先在调用层重试，任务层再重试；持久性处理失败会暂停下载新资产、清理本批次渲染 worker，等300秒续跑。质量不合格单独记为 `reject`，不会为了凑数改门槛。模型JSON字段不完整可以重新请求修正，原始响应均保留。恢复时复用与输入指纹一致的模型结果和与渲染配置一致的已验证局部图片。
+
+磁盘可用空间低于25GiB时等待，不删原始文件。默认本地渲染；显式选择 K8s 后，集群异常不回退本机渲染。默认最多处理10000个新素材；后台启动器默认上限5000个。来源耗尽、预算用完或配额无法满足时会明确报未完成，不能把处理次数记成审核通过数量。
+
+进度和交付：
+
+- `launch.json`、`production.log`：后台进程、命令和日志。
+- `summary.json`：实际保留数量、四个配额、当前阶段和更新时间。
+- `registry.jsonl`、`keep/reject/failed.jsonl`：任务状态；下载/格式/接口错误不算质量剔除。
+- `delivery-manifest.jsonl`：审核通过的实际交付路径、校验值和来源。
+- `tasks/<uid>/<mode>/delivery/`：GLB、起始图、公开解题输入 `task.json`、私有 `answers.json` 和 `audit.json`。
+- `originals/`：新素材发现、场景筛选、原题和原题审核全过程。
+- `gallery.html`：最多20份代表样本的图片与直接可读题目，不在本机打开3D渲染。
+
+建立 `<out>/STOP` 文件可在安全检查点停止；删除该文件并重启同一命令可继续。不要直接杀掉Codex子进程，以免丢失当前响应。程序不会自动重启主机或本机进程；终端断线时进程继续，主机重启后需再次执行启动命令。
+
+数量表示模型审核通过，不是人工gold。审核与作答为同一模型的独立上下文，不是不同模型交叉审核。当前未盲测真实探索轮数，也不能承诺每题必须移动30次。实际用时取决于新场景筛选率、返修次数和账号额度。

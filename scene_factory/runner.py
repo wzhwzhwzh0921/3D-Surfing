@@ -53,7 +53,7 @@ REPAIR_SYSTEM = (
 
 
 def blender_exe() -> str:
-    return os.environ.get("SCENEQA_BLENDER", "/home/ubuntu/blender/tools/blender-5.2.1-linux-x64/blender")
+    return os.environ.get("SCENEQA_BLENDER", "blender")
 
 
 def provider_key(provider: str, key_file: Path | None = None) -> str:
@@ -114,6 +114,8 @@ def run_model_phase(work: Path, *, prompt: str, system: str, tools: str,
 
 
 def blender(mode: str, source: Path, output: Path, plan: Path | None = None, *, timeout=1800) -> None:
+    from .render_policy import require_render_environment
+    require_render_environment()
     command = [blender_exe(), "--background", "--threads", "2", "--python", str(WORKER),
                "--", mode, str(source), str(output)]
     if plan:

@@ -1,0 +1,14 @@
+# Merge into your private $CODEX_HOME/config.toml, not the repository.
+# Set SCENEQA_CODEX_AUTH=configured in the pipeline environment.
+model = "your-vision-model"
+model_provider = "sceneqa_custom"
+
+[model_providers.sceneqa_custom]
+name = "My scene QA provider"
+base_url = "https://your-provider.example/v1"
+env_key = "SCENEQA_PROVIDER_API_KEY"
+wire_api = "responses"
+requires_openai_auth = false
+request_max_retries = 4
+stream_max_retries = 4
+stream_idle_timeout_ms = 300000

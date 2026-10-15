@@ -4,10 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "scene-qa-factory"
-version = "0.1.0"
-description = "Batch production of three navigable 3D scene QA variants per source GLB"
+version = "0.2.0"
+description = "Model-driven 3D scene screening, question generation and reviewed follow-up tasks"
 requires-python = ">=3.10"
 dependencies = ["requests>=2.31"]
+
+[project.optional-dependencies]
+batch = ["pyarrow"]
+render = ["numpy>=1.24,<3", "trimesh>=4,<5", "pyrender>=0.1.45", "Pillow>=10", "scipy>=1.10"]
 
 [project.scripts]
 sceneqa = "scene_factory.cli:main"
@@ -16,4 +20,5 @@ sceneqa = "scene_factory.cli:main"
 include = ["scene_factory*"]
 
 [tool.setuptools.package-data]
-scene_factory = ["static/*.html", "static/blind-agent/*.cjs", "static/blind-agent/*.json"]
+scene_factory = ["static/*.html", "static/blind-agent/*.cjs", "static/blind-agent/*.json", "prompts/*.txt"]
+"scene_factory.screening" = ["prompts/*.txt"]
