@@ -1,27 +1,35 @@
-# 连续批量追加需求生产
+# 默认主线：自动找素材并批量造题
 
-本轮目标是200份审核通过的复合任务，`bundle`、`chain`各100份；每类各50份室外、50份室内，标签由筛选模型看真实图片确认。每份任务对应一个GLB、固定初始相机、用户原题、用户追加需求和完整答案。子问题不拆开重复计数。一个原题最多产出两份不同模式的任务，所以至少需要100个不同场景；同文件哈希的不同UID不会重复出题。
+**这是完整自动造题入口。配置模型与渲染环境后，只需给输出目录和目标题量，程序就会自行联网找场景；无需先提供 URL、本地 GLB、素材清单或已有原题。**
 
-流程：新线上素材 → 下载 → 八视角及模型局部取证（本地默认，K8s可选） → v5模型留/删 → 原景中等原题及审核 → 用户追加需求 → 图片作答 → 独立上下文审核 → 返修一次或剔除。原题不足会继续寻找新场景，不复用已否决的历史池。素材发现保留作者、原网址和单资产许可证；历史UID只作排除清单。
+默认目标是200份审核通过的复合任务，`bundle`、`chain`各100份；每类各50份室外、50份室内，标签由筛选模型看真实图片确认。每份任务对应一个GLB、固定初始相机、用户原题、用户追加需求和完整答案。子问题不拆开重复计数。一个原题最多产出两份不同模式的任务，所以至少需要100个不同场景；同文件哈希的不同UID不会重复出题。
+
+流程：自动检索线上素材 → 下载 → 八视角及模型局部取证（本地默认，K8s可选） → v5模型留/删 → 原景中等原题及审核 → 用户追加需求 → 图片作答 → 独立上下文审核 → 返修一次或剔除。原题不足会继续寻找新场景，不复用已否决的历史池。素材发现保留作者、原网址和单资产许可证；历史UID只作排除清单。
 
 本生产入口的原题也不增删物件，`copies=[]`。追加阶段保留原题文字、场景和初始相机。不同模式的标准见[用户追加增难](USER_FOLLOWUP.md)。两跳交付要求提交 `original/h1/h2/final`；多目标提交 `original/extra_1/extra_2`，任意要求错误则整份任务不通过。
 
 后台启动，使用配置的模型后端，默认是当前本机Codex的ChatGPT账号及示例模型 `gpt-6.1-sol`、`xhigh`：
 
+在仓库根目录加载 `.env` 后运行：
+
 ```bash
-python tools/start_followup_batch.py \
-  --out /data/followup-200 --target 200 \
-  --seed-campaign /data/reviewed-fresh-originals \
-  --exclude-history /data/historical-uids.jsonl
+.venv/bin/python tools/start_followup_batch.py \
+  --out runs/online-200 --target 200
 ```
+
+此命令默认从零在线收集素材，**不用先运行 `auto`、`screen` 或 `qa`**。`followup-batch` 会在内部调用这些生产阶段，原题不足就继续搜索、筛选及补充。小批试跑可把 `--target` 改为4，并使用新输出目录。
+
+当前在线来源为 ProSceneverse 元数据检索 + Objaverse GLB 下载；预置检索覆盖室内和室外，不使用历史 `catalog/` 作为默认来源，详见[在线发现](AUTO_PIPELINE.md)。本地运行指调度与默认渲染的位置；素材下载和配置的远程模型服务仍需网络。K8s 只在显式选择后替换渲染位置。
+
+只有已有审核通过的原题时，才可选择添加 `--seed-campaign runs/originals` 加速；如需排除历史 UID，可添加 `--exclude-history historical-uids.jsonl`。两个参数均可省略，不是启动所需输入。
 
 已有原题是可选种子，不能用素材候选清单代替 `selected.jsonl`。启动器把源码和prompt存入 `<out>/runtime`，只复制Python和prompt文件，不复制凭据、原资产或.env；后续改主仓库不影响正在运行的批次。启动器保存账号指纹、PID和命令；不会把登录token复制到批次目录。重启同一个批次执行同一命令，会使用冻结版本。运行时不允许更换绑定的模型/provider配置、认证身份或修改冻结文件。后台启动器支持 `--model`、`--backend codex|relay|plugin`、`--reasoning`、`--render-backend local|k8s`，默认继承环境配置。见[模型接口](MODEL_INTERFACE.md)及[渲染配置](RENDERING.md)。
 
 前台入口（需自己保持进程运行）：
 
 ```bash
-python -m scene_factory workflow followup-batch \
-  --out /data/followup-200 --target 200 --watch
+.venv/bin/python -m scene_factory workflow followup-batch \
+  --out runs/online-200 --target 200 --watch
 ```
 
 请求429、5xx和超时先在调用层重试，任务层再重试；持久性处理失败会暂停下载新资产、清理本批次渲染 worker，等300秒续跑。质量不合格单独记为 `reject`，不会为了凑数改门槛。模型JSON字段不完整可以重新请求修正，原始响应均保留。恢复时复用与输入指纹一致的模型结果和与渲染配置一致的已验证局部图片。

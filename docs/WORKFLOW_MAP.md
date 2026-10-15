@@ -1,18 +1,18 @@
 # Pipeline 与代码地图
 
-当前推荐主线是原景问答及用户追加需求。渲染默认本地，可显式选择 K8s；模型默认通过 Codex，可读取自己的 provider。完整命令见[README](../README.md)，接口分别见[模型](MODEL_INTERFACE.md)和[渲染](RENDERING.md)。
+当前推荐主线是**程序自动联网找素材 → 下载 → 模型筛选 → 原景问答及审核 → 用户追加增难及审核 → 交付**。运行 `.venv/bin/python tools/start_followup_batch.py --out runs/online-200 --target 200` 即可从零启动，无需素材清单或种子原题；`auto` 是内部原题子流程。渲染默认本地，可显式选择 K8s；模型默认通过 Codex，可读取自己的 provider。完整命令见[README](../README.md)，接口分别见[模型](MODEL_INTERFACE.md)和[渲染](RENDERING.md)。
 
 ## 阶段、边界与产物
 
 | 阶段 | 统一命令 | 实现 | 输入 → 输出 |
 |---|---|---|---|
-| 在线发现 | `auto` / `prepare` | `sources.py`、`live_sources.py` | 元数据 / 索引 → 可下载 URL、来源许可、UID |
+| 在线发现 | 主线内部 / `auto` / `prepare` | `sources.py`、`live_sources.py` | 元数据 / 索引 → 可下载 URL、来源许可、UID |
 | 下载与证据 | `screen` | `screening/intake.py` | URL / 本地 GLB → 文件哈希、八视角、相机 |
 | 看图留删 | `screen` / `screen-images` | `screening/batch.py`、`rich.py` | 八视角 + 局部取景 → keep / reject / failed |
 | 原题及审核返修 | `qa` | `tools/scene_feedback_loop.py` | 场景 → 中等题、模型答案、相机、审核、交付 |
 | 二次增难 | `followup` | `followup.py` | `selected.jsonl` → bundle / chain + 作答及审核 |
 | 自动补素材原题 | `auto` | `automation.py` | 来源策略 + 目标 → `selected.jsonl` |
-| 连续复合任务生产 | `followup-batch` | `followup_production.py` | 可选原题种子 + 目标 → 完整任务及四个配额 |
+| 完整主线：连续复合任务生产 | `followup-batch` | `followup_production.py` | 输出目录 + 目标（种子可省略）→ 自动找新素材、生成原题、完整任务及四个配额 |
 | 多原题队列 | `production` | `tools/scene_production_batch.py` | `prepare` 分片 → 并行原题生产 + 最终审核 |
 | 独立原题审核 | `review` / `delivery-review` | `tools/independent_qa_audit.py`、`delivery_qa_gate.py` | 题目 + 图片 + 候选答案 → 结构化审核 |
 | 三档增强实验 | `augment` / `export` | `experiments/sol_augment/`、`tools/export_scene_delivery.py` | 原生物件复制计划 → simple / medium / hard，非默认复合任务出口 |
@@ -33,6 +33,8 @@ workflow CLI
        ├─ LocalWorker                     本地子进程
        └─ KubernetesWorker                kubectl，明确 opt-in
 ```
+
+素材发现当前使用 ProSceneverse 在线索引检索并下载对应 Objaverse GLB，默认联网，不依赖旧素材池。“本地”是调度与渲染的位置，不表示离线生成。
 
 模型与后端互不绑定；局部视角请求经 `screening/inspection.py` 串行调用相同渲染接口。GLB worker 可以单独上传，故导入前的执行位置检查保留在独立文件中。主调度模块不会导入 pyrender 或 bpy。
 

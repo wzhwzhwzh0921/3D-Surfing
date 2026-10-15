@@ -1,10 +1,14 @@
 # 工作流脚本
 
-推荐从仓库根目录使用 `sceneqa workflow list` 和 `sceneqa workflow <阶段> --help`。
+默认完整造题命令：`.venv/bin/python tools/start_followup_batch.py --out runs/online-200 --target 200`。程序自行联网检索、下载和筛选场景，生成原题、答案及追加增难任务；无需预先提供 URL、GLB 或种子原题。默认本地渲染，K8s 可选，模型按环境配置接入。
+
+各阶段调试时，从仓库根目录使用 `sceneqa workflow list` 和 `sceneqa workflow <阶段> --help`。
 完整依赖关系见[流程与代码地图](../docs/WORKFLOW_MAP.md)。
 
 | 文件 | 统一命令 | 职责 |
 |---|---|---|
+| `start_followup_batch.py` | 后台启动 `workflow followup-batch` | **完整主线**：自动找新素材、原题、二次增难、审核及交付 |
+| `../scene_factory/followup.py` | `workflow followup` | 对已经审核的原题单独追加需求，不主动发现新素材 |
 | `scene_pipeline.py` | `workflow screen` | 筛选兼容入口，实际实现为 `scene_factory.screening.intake` |
 | `scene_screen_batch.py` | `workflow screen-images` | 图片筛选兼容入口，实际实现为 `scene_factory.screening.batch` |
 | `scene_feedback_loop.py` | `workflow qa` | 增强、出题、中等题审核与返修 |
